@@ -2902,6 +2902,20 @@ AS_IF([test "${enable_tiger}" != "no"], [
   ])
 ])
 
+dnl
+dnl  SCTE 35 decoder plugin
+dnl
+AC_ARG_ENABLE(scte35,
+  [  --enable-scte35         SCTE 35 decoder support (default auto)])
+if test "${enable_scte35}" != "no"
+then
+  AC_CHECK_HEADERS(libklvanc/vanc.h, [
+    AC_CHECK_HEADERS(libklscte35/scte35.h, [
+      VLC_ADD_PLUGIN([scte35])
+      VLC_ADD_LIBS([scte35],[-lklvanc -lklscte35])
+         ],[])
+     ],[])
+fi
 
 dnl
 dnl  Video plugins

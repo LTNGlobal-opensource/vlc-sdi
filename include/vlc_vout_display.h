@@ -125,6 +125,7 @@ typedef struct {
     bool has_hide_mouse;                    /* Is mouse automatically hidden */
     bool has_pictures_invalid;              /* Will VOUT_DISPLAY_EVENT_PICTURES_INVALID be used */
     bool has_event_thread;                  /* Will events (key at least) be emitted using an independent thread */
+    bool supports_vanc;                     /* Output supports VANC lines? */
     const vlc_fourcc_t *subpicture_chromas; /* List of supported chromas for subpicture rendering. */
 } vout_display_info_t;
 

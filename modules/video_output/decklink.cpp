@@ -789,6 +789,18 @@ static void send_AFD(vout_display_t *vd, uint8_t *buf)
     }
 }
 
+static void send_vanc_msg(vout_display_t *vd, uint8_t *buf, uint16_t *msg, uint16_t msgWordLength)
+{
+    /* convert to v210 and write into VBI line of VANC */
+    size_t len = msgWordLength / 6;
+    for (size_t w = 0; w < len; w++) {
+        put_le32(&buf, msg[w * 6 + 0] << 10);
+        put_le32(&buf, msg[w * 6 + 1] | (msg[w * 6 + 2] << 20));
+        put_le32(&buf, msg[w * 6 + 3] << 10);
+        put_le32(&buf, msg[w * 6 + 4] | (msg[w * 6 + 5] << 20));
+    }
+}
+
 /* 708 */
 static void send_CC(vout_display_t *vd, cc_data_t *cc, uint8_t *buf)
 {
@@ -923,7 +935,7 @@ static void send_CC(vout_display_t *vd, cc_data_t *cc, uint8_t *buf)
     delete[] cdp;
 }
 
-static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *)
+static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *subpicture)
 {
     vout_display_sys_t *sys = vd->sys;
     struct decklink_sys_t *decklink_sys = GetDLSys(VLC_OBJECT(vd));
@@ -1002,6 +1014,13 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *)
             //break;
         }
 
+	/* TODO: Bug. If the AFD and CC are on the same line,
+	 * the second attempt to write to the same line trashes the
+	 * first message. Each call to GetBufferForVerticalBlankingLine()
+	 * returns the beginning of the line buffer, and we trample it.
+	 * Workaround: Ensure ALL VANC messages are on seperate lines for the time being.
+	 */
+
         send_CC(vd, &picture->cc, (uint8_t*)buf);
 
         if (0 && picture->cc.i_data) {
@@ -1010,6 +1029,20 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *)
                 printf("%.2x ", picture->cc.p_data[i]);
             printf("\n");
         }
+
+	/* Output VANC lines provided by decoders */
+	if (subpicture) {
+	  for (subpicture_region_t *r = subpicture->p_region; r != NULL;
+	       r = r->p_next) {
+	    if (r->fmt.i_chroma == VLC_CODEC_VANC) {
+	      result = vanc->GetBufferForVerticalBlankingLine(r->i_y, &buf);
+	      if (result == S_OK) {
+		send_vanc_msg(vd, (uint8_t *) buf, (uint16_t *) r->p_picture->Y_PIXELS,
+			      r->fmt.i_width / sizeof(uint16_t));
+	      }
+	    }
+	  }
+	}
 
         line = var_InheritInteger(vd, VIDEO_CFG_PREFIX "afd-line");
         result = vanc->GetBufferForVerticalBlankingLine(line, &buf);
@@ -1115,6 +1148,9 @@ static int OpenVideo(vlc_object_t *p_this)
 
     fmt->i_width = decklink_sys->i_width;
     fmt->i_height = decklink_sys->i_height;
+
+    /* FIXME: should only advertise VANC for SDI outputs */
+    vd->info.supports_vanc = true;
 
     char *pic_file = var_InheritString(p_this, VIDEO_CFG_PREFIX "nosignal-image");
     if (pic_file) {

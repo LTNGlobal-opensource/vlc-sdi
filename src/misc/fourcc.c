@@ -1955,6 +1955,7 @@ static const struct
 
     { { VLC_CODEC_Y211, 0 },                   { 1, { {{1,4}, {1,1}} }, 4, 32 } },
     { { VLC_CODEC_XYZ12,  0 },                 PACKED_FMT(6, 48) },
+    { { VLC_CODEC_VANC, 0 },                   PACKED_FMT(1, 8) },
 
     { {0}, { 0, {}, 0, 0 } }
 };

@@ -948,7 +948,9 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
             vout->p->spu_blend = NULL;
             vout->p->spu_blend_chroma = 0;
         }
-        if (!vout->p->spu_blend && vout->p->spu_blend_chroma != fmt_spu.i_chroma) {
+
+        if (!vout->p->spu_blend && vout->p->spu_blend_chroma != fmt_spu.i_chroma &&
+            fmt_spu.i_chroma != VLC_CODEC_VANC) {
             vout->p->spu_blend_chroma = fmt_spu.i_chroma;
             vout->p->spu_blend = filter_NewBlend(VLC_OBJECT(vout), &fmt_spu);
             if (!vout->p->spu_blend)
@@ -961,6 +963,22 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
                                       &vd->source,
                                       render_subtitle_date, render_osd_date,
                                       do_snapshot);
+
+    if (!vd->info.supports_vanc && subpic) {
+        /* Video output doesn't support VANC, so remove those regions... */
+        for (subpicture_region_t *region = subpic->p_region; region != NULL;) {
+            subpicture_region_t *tmp = region->p_next;
+            if (region->fmt.i_chroma == VLC_CODEC_VANC) {
+                subpicture_region_Delete(region);
+                if (region == subpic->p_region) {
+                    subpic->p_region = region = tmp;
+                    continue;
+                }
+            }
+            region = tmp;
+        }
+    }
+
     /*
      * Perform rendering
      *
@@ -975,12 +993,16 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
         if (todisplay) {
             VideoFormatCopyCropAr(&todisplay->format, &filtered->format);
             picture_Copy(todisplay, filtered);
+#if 0
             if (vout->p->spu_blend)
                 picture_BlendSubpicture(todisplay, vout->p->spu_blend, subpic);
+#endif
         }
         picture_Release(filtered);
+#if 0
         subpicture_Delete(subpic);
         subpic = NULL;
+#endif
 
         if (!todisplay)
             return VLC_EGENERIC;
@@ -1018,12 +1040,18 @@ static int ThreadDisplayRenderPicture(vout_thread_t *vout, bool is_forced)
     } else {
         sys->display.filtered = vout_FilterDisplay(vd, direct);
         if (sys->display.filtered) {
+#if 0
             if (!do_dr_spu && !do_early_spu && vout->p->spu_blend && subpic)
                 picture_BlendSubpicture(sys->display.filtered, vout->p->spu_blend, subpic);
+#endif
             vout_display_Prepare(vd, sys->display.filtered, do_dr_spu ? subpic : NULL);
         }
+
+#if 0
         if (!do_dr_spu && subpic)
             subpicture_Delete(subpic);
+#endif
+
         if (!sys->display.filtered)
             return VLC_EGENERIC;
     }

@@ -778,7 +778,7 @@ static void SpuRenderRegion(spu_t *spu,
     }
 
     /* Scale from rendered size to destination size */
-    if (sys->scale && sys->scale->p_module &&
+    if (region_fmt.i_chroma != VLC_CODEC_VANC && sys->scale && sys->scale->p_module &&
         (!using_palette || (sys->scale_yuvp && sys->scale_yuvp->p_module)) &&
         (scale_size.w != SCALE_UNIT || scale_size.h != SCALE_UNIT ||
         using_palette || convert_chroma)) {

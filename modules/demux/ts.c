@@ -2281,6 +2281,10 @@ static void PIDFillFormat( ts_es_t *es, int i_stream_type )
     case 0x85:  /* DTS (audio) */
         es_format_Init( fmt, AUDIO_ES, VLC_CODEC_DTS );
         break;
+    case 0x86:  /* SCTE-35 */
+        es_format_Init( fmt, SPU_ES,  VLC_CODEC_SCTE_35 );
+        es->data_type = TS_ES_DATA_TABLE_SECTION;
+        break;
     case 0x87: /* E-AC3 */
         es_format_Init( fmt, AUDIO_ES, VLC_CODEC_EAC3 );
         break;
