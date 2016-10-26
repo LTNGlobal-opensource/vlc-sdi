@@ -241,7 +241,7 @@ static subpicture_t *Decode( decoder_t *p_dec, block_t **pp_block )
 
         p_spu->i_start = p_block->i_pts;
         p_spu->i_stop = p_spu->i_start + (CLOCK_FREQ / 30);
-#if 1
+#if 0
         p_spu->i_stop = p_spu->i_start + CLOCK_FREQ * 10;
 #endif   
         
