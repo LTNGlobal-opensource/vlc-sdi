@@ -246,7 +246,7 @@ static subpicture_t *Decode( decoder_t *p_dec, block_t **pp_block )
 #endif   
         
         p_spu->b_ephemer  = false;
-        p_spu->b_absolute = false;
+        p_spu->b_absolute = true;
         
         p_spu_sys->buf = calloc(1, p_block->i_buffer);
         if (p_spu_sys->buf != NULL) {
