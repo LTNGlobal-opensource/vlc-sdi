@@ -1469,8 +1469,20 @@ static void PlayAudio(audio_output_t *aout, block_t *audio)
 
     audio->i_pts -= decklink_sys->offset;
 
+    /* We need to copy the audio block because the block_t is already
+       on a list and putting it onto a block_Fifo will corrupt p_next */
+    struct block_t *p_block_copy = block_Duplicate(audio);
+    if (p_block_copy == NULL) {
+        msg_Err(aout, "Block duplication failed");
+        block_Release(audio);
+        return;
+    }
+
+    /* Done with the original audio block handed to us by the decoder */
+    block_Release(audio);
+
     /* Push the current audio pair payload into its fifo */
-    block_FifoPut(s->fifo, audio);
+    block_FifoPut(s->fifo, p_block_copy);
 
     /* We slave the entire output from a single pts, we'll use the pts from the
      * first audio pair. If we're not currently the first audio pair, we're done.
