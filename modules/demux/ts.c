@@ -1660,6 +1660,9 @@ static void ParseTableSection( demux_t *p_demux, ts_pid_t *pid, block_t *p_data 
 
                 }
             }
+        } else if( pid->es->fmt.i_codec == VLC_CODEC_SCTE_35 ) {
+            es_out_Control( p_demux->out, ES_OUT_SET_ES_STATE,
+                            pid->es->id, true );
         }
         p_content->i_dts =
         p_content->i_pts = VLC_TS_0 + i_date * 100 / 9;
