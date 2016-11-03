@@ -793,12 +793,26 @@ static void send_vanc_msg(vout_display_t *vd, uint8_t *buf, uint16_t *msg, uint1
 {
     /* convert to v210 and write into VBI line of VANC */
     size_t len = msgWordLength / 6;
-    for (size_t w = 0; w < len; w++) {
+    size_t w;
+
+    for (w = 0; w < len; w++) {
         put_le32(&buf, msg[w * 6 + 0] << 10);
         put_le32(&buf, msg[w * 6 + 1] | (msg[w * 6 + 2] << 20));
         put_le32(&buf, msg[w * 6 + 3] << 10);
         put_le32(&buf, msg[w * 6 + 4] | (msg[w * 6 + 5] << 20));
     }
+
+    /* Handle remaining 0-5 bytes if any */
+    if (msgWordLength % 6 > 0)
+        put_le32(&buf, msg[w * 6 + 0] << 10);
+    if (msgWordLength % 6 > 2)
+        put_le32(&buf, msg[w * 6 + 1] | (msg[w * 6 + 2] << 20));
+    else if (msgWordLength % 6 > 1)
+        put_le32(&buf, msg[w * 6 + 1]);
+    if (msgWordLength % 6 > 3)
+        put_le32(&buf, msg[w * 6 + 3] << 10);
+    if (msgWordLength % 6 > 4)
+        put_le32(&buf, msg[w * 6 + 4]);
 }
 
 /* 708 */
