@@ -2918,6 +2918,19 @@ then
 fi
 
 dnl
+dnl  SMPTE 2038 decoder plugin
+dnl
+AC_ARG_ENABLE(smpte2038,
+  [  --enable-smpte2038         SMPTE 2038 decoder support (default auto)])
+if test "${enable_smpte2038}" != "no"
+then
+  AC_CHECK_HEADERS(libklvanc/vanc.h, [
+    VLC_ADD_PLUGIN([smpte2038])
+    VLC_ADD_LIBS([smpte2038],[-lklvanc])
+  ],[])
+fi
+
+dnl
 dnl  Video plugins
 dnl
 

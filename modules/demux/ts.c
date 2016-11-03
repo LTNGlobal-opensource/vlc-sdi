@@ -238,7 +238,8 @@ typedef struct
 typedef enum
 {
     TS_ES_DATA_PES,
-    TS_ES_DATA_TABLE_SECTION
+    TS_ES_DATA_TABLE_SECTION,
+    TS_ES_DATA_RAW,
 } ts_es_data_type_t;
 
 typedef struct
@@ -2163,6 +2164,30 @@ static bool GatherData( demux_t *p_demux, ts_pid_t *pid, block_t *p_bk )
                         pid->es->id, b_scrambled );
     }
 
+    if (pid->es->data_type == TS_ES_DATA_RAW) {
+        /* Just hand the data straight off to the decoder without packetization */
+        mtime_t i_date = -1;
+        for( int i = 0; pid->p_owner && i < pid->p_owner->i_prg; i++ )
+        {
+            if( pid->i_owner_number == pid->p_owner->prg[i]->i_number )
+            {
+                i_date = pid->p_owner->prg[i]->i_pcr_value;
+                if( i_date >= 0 )
+                    break;
+            }
+        }
+
+        /* Hack:  we really should find a better place to make
+           sure SMPTE 2038 is enabled */
+        es_out_Control( p_demux->out, ES_OUT_SET_ES_STATE,
+                        pid->es->id, true );
+
+        p_bk->i_dts =
+        p_bk->i_pts = VLC_TS_0 + i_date * 100 / 9;
+        es_out_Send( p_demux->out, pid->es->id, p_bk );
+        return true;
+    }
+
     /* We have to gather it */
     p_bk->p_buffer += i_skip;
     p_bk->i_buffer -= i_skip;
@@ -3453,6 +3478,14 @@ static void PMTSetupEs0x06( demux_t *p_demux, ts_pid_t *pid,
         p_fmt->i_cat = AUDIO_ES;
         p_fmt->b_packetized = true;
         p_fmt->i_codec = VLC_CODEC_302M;
+    }
+    else if( PMTEsHasRegistration( p_demux, p_es, "VANC" ) )
+    {
+        /* SMPTE 2038-2008: Carriage of Ancillary Data Packets in
+           an MPEG-2 Transport Stream */
+        p_fmt->i_cat = SPU_ES;
+        p_fmt->i_codec = VLC_CODEC_VANC;
+        pid->es->data_type = TS_ES_DATA_RAW;
     }
     else
     {
