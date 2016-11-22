@@ -2181,9 +2181,7 @@ static bool GatherData( demux_t *p_demux, ts_pid_t *pid, block_t *p_bk )
            sure SMPTE 2038 is enabled */
         es_out_Control( p_demux->out, ES_OUT_SET_ES_STATE,
                         pid->es->id, true );
-
-        p_bk->i_dts =
-        p_bk->i_pts = VLC_TS_0 + i_date * 100 / 9;
+        p_bk->i_dts = p_bk->i_pts = i_date;
         es_out_Send( p_demux->out, pid->es->id, p_bk );
         return true;
     }
