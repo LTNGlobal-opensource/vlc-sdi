@@ -1053,6 +1053,8 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
 	      if (result == S_OK) {
 		send_vanc_msg(vd, (uint8_t *) buf, (uint16_t *) r->p_picture->Y_PIXELS,
 			      r->fmt.i_width / sizeof(uint16_t));
+	      } else {
+		msg_Err(vd, "Invalid line specified for VANC output: %d\n", r->i_y);
 	      }
 	    }
 	  }
