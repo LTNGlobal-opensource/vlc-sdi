@@ -815,6 +815,108 @@ static void send_vanc_msg(vout_display_t *vd, uint8_t *buf, uint16_t *msg, uint1
         put_le32(&buf, msg[w * 6 + 4]);
 }
 
+/* If a trigger file exists in /tmp, generate a SCTE104 message and
+ * send it.
+ */
+static int send_SCTE104(vout_display_t *vd, uint8_t *buf)
+{
+    int ret = VLC_SUCCESS;
+    unsigned char *frame_payload;
+    uint16_t vanc_sum = 0;
+    uint16_t *frame = 0;
+    size_t s = 0;
+    size_t payload_length = 0;
+
+    uint16_t len = 6	/* vanc header */
+        + 0		/* raw SCTE104 data */
+        + 1;		/* vanc checksum */
+
+    uint16_t frame_header[6] = {
+        /* VANC header = 6 words */
+        0x000, 0x3ff, 0x3ff, /* Ancillary Data Flag */
+
+        /* following words need parity bits */
+
+        0x41, /* Data ID */
+        0x07, /* Secondary Data ID=SCTE 104 */
+        (uint16_t)(len - 6 - 1), /* Data Count (not including VANC header) */
+    };
+
+#define SCTE104_FN "/tmp/scte104-payload.bin"
+    FILE *fh = fopen(SCTE104_FN, "rb");
+    if (!fh) {
+        ret = VLC_EGENERIC;
+        goto out_nofile;
+    }
+
+    /* Skip to end, find length, rewind, malloc and read into ram. */
+    fseek(fh, 0, SEEK_END);
+    payload_length = ftell(fh);
+    if (payload_length > 200) {
+        msg_Err(vd, "SCTE104 illegal file length %ld, should be < 200 bytes", payload_length);
+        ret = VLC_EGENERIC;
+        goto out_file;
+    }
+    len += payload_length;
+    frame_header[5] += payload_length;
+
+    fseek(fh, 0, SEEK_SET);
+    frame_payload = (unsigned char *)malloc(payload_length);
+    if (!frame_payload)
+        return VLC_ENOMEM;
+
+    if (fread(frame_payload, 1, payload_length, fh) != payload_length) {
+        ret = VLC_EGENERIC;
+        goto out_mem;
+    }
+
+    s = ((len + 5) / 6) * 6; /* align to 6 for v210 conversion */
+
+    frame = new uint16_t[s];
+
+    /* insert frame header */
+    memcpy(frame, frame_header, sizeof(frame_header));
+
+    /* insert frame payload */
+    for (size_t i = 0; i < payload_length; i++)
+        frame[6 + i] = frame_payload[i];
+
+    /* fixup the parity bit */
+    for (uint16_t i = 3; i < len - 1; i++)
+        frame[i] |= parity(frame[i]) ? 0x100 : 0x200;
+
+    /* vanc checksum */
+    for (uint16_t i = 3; i < len - 1; i++) {
+        vanc_sum += frame[i];
+        vanc_sum &= 0x1ff;
+    }
+    frame[len - 1] = vanc_sum | ((~vanc_sum & 0x100) << 1);
+
+    /* pad */
+    for (size_t i = len; i < s; i++)
+        frame[i] = 0x040;
+
+    printf("Sending VANC: ");
+    for (unsigned int i = 0; i < s; i++) {
+        printf("%04x ", frame[i]);
+    }
+    printf("\n");
+
+    send_vanc_msg(vd, buf, frame, s);
+
+    delete[] frame;
+    msg_Err(vd, "Sent SCTE104 VANC message");
+
+out_mem:
+    free(frame_payload);
+out_file:
+    fclose(fh);
+    unlink(SCTE104_FN);
+
+out_nofile:
+    return ret;
+}
+
 /* 708 */
 static void send_CC(vout_display_t *vd, cc_data_t *cc, uint8_t *buf)
 {
@@ -1036,6 +1138,9 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
 	 */
 
         send_CC(vd, &picture->cc, (uint8_t*)buf);
+#if 1
+        send_SCTE104(vd, (uint8_t*)buf);
+#endif
 
         if (0 && picture->cc.i_data) {
             printf("cc_count %d: ", picture->cc.i_data / 3);
