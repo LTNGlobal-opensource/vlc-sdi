@@ -160,7 +160,7 @@ static void SubpictureTextUpdateSmpte2038(subpicture_t *subpic,
             if (smpte2038_convert_line_to_words(l, &vancWords, &vancWordCount) < 0)
                 break;
 
-#if 1
+#if 0
             fprintf(stderr, "LineEntry[%d] DID=0x%02x SDID=0x%02x (line %d): ", i, l->DID, l->SDID, l->line_number);
             for (int j = 0; j < vancWordCount; j++)
                 fprintf(stderr, "%03x ", vancWords[j]);
