@@ -1,6 +1,7 @@
 /*****************************************************************************
  * decklink.cpp: BlackMagic DeckLink SDI output module
  *****************************************************************************
+ * Copyright (C) 2016 Devin Heitmueller <dheitmueller@kernellabs.com>
  * Copyright (C) 2012-2013 Rafaël Carré
  * Copyright (C) 2009 Michael Niedermayer <michaelni@gmx.at>
  * Copyright (c) 2009 Baptiste Coudurier <baptiste dot coudurier at gmail dot com>
@@ -53,6 +54,7 @@
 
 #include <DeckLinkAPI.h>
 #include <DeckLinkAPIDispatch.cpp>
+#include "libklvanc/vanc-lines.h"
 
 #define MAX_AUDIO_SOURCES 8
 
@@ -734,12 +736,13 @@ static void report(vlc_object_t *obj, const char *str, uint64_t val)
 }
 #define report(obj, str, val) report(VLC_OBJECT(obj), str, val)
 
-static void send_AFD(vout_display_t *vd, uint8_t *buf)
+static void send_AFD(uint16_t **afd_buf, int *afd_buf_len)
 {
     const size_t len = 6 /* vanc header */ + 8 /* AFD data */ + 1 /* csum */;
-    const size_t s = ((len + 5) / 6) * 6; // align for v210
 
-    uint16_t afd[s];
+    uint16_t *afd = new uint16_t[len];
+    *afd_buf = afd;
+    *afd_buf_len = len;
 
     afd[0] = 0x000;
     afd[1] = 0x3ff;
@@ -775,21 +778,9 @@ static void send_AFD(vout_display_t *vd, uint8_t *buf)
     }
 
     afd[len - 1] = vanc_sum | ((~vanc_sum & 0x100) << 1);
-
-    /* pad */
-    for (size_t i = len; i < s; i++)
-        afd[i] = 0x040;
-
-    /* convert to v210 and write into VANC */
-    for (size_t w = 0; w < s / 6 ; w++) {
-        put_le32(&buf, afd[w*6+0] << 10);
-        put_le32(&buf, afd[w*6+1] | (afd[w*6+2] << 20));
-        put_le32(&buf, afd[w*6+3] << 10);
-        put_le32(&buf, afd[w*6+4] | (afd[w*6+5] << 20));
-    }
 }
 
-static void send_vanc_msg(vout_display_t *vd, uint8_t *buf, uint16_t *msg, uint16_t msgWordLength)
+static void send_vanc_msg(uint8_t *buf, uint16_t *msg, uint16_t msgWordLength)
 {
     /* convert to v210 and write into VBI line of VANC */
     size_t len = msgWordLength / 6;
@@ -816,7 +807,7 @@ static void send_vanc_msg(vout_display_t *vd, uint8_t *buf, uint16_t *msg, uint1
 }
 
 /* 708 */
-static void send_CC(vout_display_t *vd, cc_data_t *cc, uint8_t *buf)
+static void send_CC(vout_display_t *vd, cc_data_t *cc, uint16_t **cc_buf, int *cc_buf_len)
 {
     struct decklink_sys_t *decklink_sys = GetDLSys(VLC_OBJECT(vd));
     uint8_t cc_count = cc->i_data / 3;
@@ -846,9 +837,9 @@ static void send_CC(vout_display_t *vd, cc_data_t *cc, uint8_t *buf)
         + 1 /* vanc checksum */;
 
     static uint16_t hdr = 0; /* cdp counter */
-    size_t s = ((len + 5) / 6) * 6; /* align to 6 for v210 conversion */
-
-    uint16_t *cdp = new uint16_t[s];
+    uint16_t *cdp = new uint16_t[len];
+    *cc_buf = cdp;
+    *cc_buf_len = len;
 
     unsigned int num, den;
     vlc_ureduce(&num, &den, decklink_sys->timescale, decklink_sys->frameduration, 0);
@@ -933,20 +924,6 @@ static void send_CC(vout_display_t *vd, cc_data_t *cc, uint8_t *buf)
         vanc_sum &= 0x1ff;
     }
     cdp[len - 1] = vanc_sum | ((~vanc_sum & 0x100) << 1);
-
-    /* pad */
-    for (size_t i = len; i < s; i++)
-        cdp[i] = 0x040;
-
-    /* convert to v210 and write into VBI line of VANC */
-    for (size_t w = 0; w < s / 6 ; w++) {
-        put_le32(&buf, cdp[w*6+0] << 10);
-        put_le32(&buf, cdp[w*6+1] | (cdp[w*6+2] << 20));
-        put_le32(&buf, cdp[w*6+3] << 10);
-        put_le32(&buf, cdp[w*6+4] | (cdp[w*6+5] << 20));
-    }
-
-    delete[] cdp;
 }
 
 static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *subpicture)
@@ -954,6 +931,8 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
     vout_display_sys_t *sys = vd->sys;
     struct decklink_sys_t *decklink_sys = GetDLSys(VLC_OBJECT(vd));
     mtime_t now = mdate();
+    struct vanc_line_set_s vanc_lines;
+    memset(&vanc_lines, 0, sizeof(vanc_lines));
 
     if (!picture)
         return;
@@ -1019,54 +998,61 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
             goto end;
         }
 
-        int line = var_InheritInteger(vd, VIDEO_CFG_PREFIX "cc-line");
-        void *buf;
-        result = vanc->GetBufferForVerticalBlankingLine(line, &buf);
-        if (result != S_OK) {
-            msg_Err(vd, "Failed to get VBI line %d: %d", line, result);
-            goto end;
-            //break;
+        /* Locally generated CC VANC */
+        int cc_line = var_InheritInteger(vd, VIDEO_CFG_PREFIX "cc-line");
+        uint16_t *cc_buf = NULL;
+        int cc_buf_len;
+        send_CC(vd, &picture->cc, &cc_buf, &cc_buf_len);
+        if (cc_buf != NULL) {
+            vanc_line_insert(&vanc_lines, cc_buf, cc_buf_len, cc_line, 0);
+            delete [] cc_buf;
         }
 
-	/* TODO: Bug. If the AFD and CC are on the same line,
-	 * the second attempt to write to the same line trashes the
-	 * first message. Each call to GetBufferForVerticalBlankingLine()
-	 * returns the beginning of the line buffer, and we trample it.
-	 * Workaround: Ensure ALL VANC messages are on seperate lines for the time being.
-	 */
-
-        send_CC(vd, &picture->cc, (uint8_t*)buf);
-
-        if (0 && picture->cc.i_data) {
-            printf("cc_count %d: ", picture->cc.i_data / 3);
-            for (int i = 0; i < picture->cc.i_data; i++)
-                printf("%.2x ", picture->cc.p_data[i]);
-            printf("\n");
+        /* Locally generated AFD VANC */
+        int afd_line = var_InheritInteger(vd, VIDEO_CFG_PREFIX "afd-line");
+        uint16_t *afd_buf = NULL;
+        int afd_buf_len;
+        send_AFD(&afd_buf, &afd_buf_len);
+        if (afd_buf != NULL) {
+            vanc_line_insert(&vanc_lines, afd_buf, afd_buf_len, afd_line, 0);
+            delete [] afd_buf;
         }
 
-	/* Output VANC lines provided by decoders */
-	if (subpicture) {
-	  for (subpicture_region_t *r = subpicture->p_region; r != NULL;
-	       r = r->p_next) {
-	    if (r->fmt.i_chroma == VLC_CODEC_VANC) {
-	      result = vanc->GetBufferForVerticalBlankingLine(r->i_y, &buf);
-	      if (result == S_OK) {
-		send_vanc_msg(vd, (uint8_t *) buf, (uint16_t *) r->p_picture->Y_PIXELS,
-			      r->fmt.i_width / sizeof(uint16_t));
-	      } else {
-		msg_Err(vd, "Invalid line specified for VANC output: %d\n", r->i_y);
-	      }
-	    }
-	  }
-	}
-
-        line = var_InheritInteger(vd, VIDEO_CFG_PREFIX "afd-line");
-        result = vanc->GetBufferForVerticalBlankingLine(line, &buf);
-        if (result != S_OK) {
-            msg_Err(vd, "Failed to get VBI line %d: %d", line, result);
-            goto end;
+        /* Handle VANC lines provided by decoders */
+        if (subpicture) {
+            for (subpicture_region_t *r = subpicture->p_region; r != NULL;
+                 r = r->p_next) {
+                if (r->fmt.i_chroma != VLC_CODEC_VANC)
+                    continue;
+                vanc_line_insert(&vanc_lines, (uint16_t *) r->p_picture->Y_PIXELS,
+                                 r->fmt.i_width / sizeof(uint16_t), r->i_y, r->i_x);
+            }
         }
-        send_AFD(vd, (uint8_t*)buf);
+
+        /* Now that we've got all the VANC lines in a nice orderly manner, generate the
+           final VANC sections for the Decklink output */
+        for (int i = 0; i < vanc_lines.num_lines; i++) {
+            struct vanc_line_s *line = vanc_lines.lines[i];
+            uint16_t *out_line;
+            int out_len;
+            void *buf;
+
+            if (line == NULL)
+                break;
+            result = vanc->GetBufferForVerticalBlankingLine(line->line_number, &buf);
+            if (result != S_OK) {
+                msg_Err(vd, "Failed to get VANC line %d: %d", line->line_number, result);
+                return;
+            }
+
+            /* Generate the full line taking into account all VANC packets on that line */
+            generate_vanc_line(line, &out_line, &out_len, w);
+
+            /* Repack the 16-bit ints into 10-bit, and push into final buffer */
+            send_vanc_msg((uint8_t *) buf, out_line, out_len);
+            free(out_line);
+            vanc_line_free(line);
+        }
 
         v210_convert(frame_bytes, picture, stride);
 
