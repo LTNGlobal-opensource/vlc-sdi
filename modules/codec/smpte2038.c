@@ -147,6 +147,7 @@ static void SubpictureTextUpdateSmpte2038(subpicture_t *subpic,
 
         struct smpte2038_anc_data_packet_s *pkt = 0;
         smpte2038_parse_pes_packet(p_block->p_buffer, p_block->i_buffer, &pkt);
+        block_Release(p_block);
         if (pkt == NULL) {
             fprintf(stderr, "%s failed to decode PES packet\n", __func__);
             continue;
@@ -343,7 +344,9 @@ static void Close( vlc_object_t *p_this )
     decoder_t     *p_dec = (decoder_t *) p_this;
     decoder_sys_t *p_sys = p_dec->p_sys;
     
+    block_FifoRelease( p_sys->fifo );
     pe_free(&p_sys->pe);
+    free(p_sys);
 }
 
 /*****************************************************************************
