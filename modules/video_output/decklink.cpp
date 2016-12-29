@@ -1000,22 +1000,26 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
 
         /* Locally generated CC VANC */
         int cc_line = var_InheritInteger(vd, VIDEO_CFG_PREFIX "cc-line");
-        uint16_t *cc_buf = NULL;
-        int cc_buf_len;
-        send_CC(vd, &picture->cc, &cc_buf, &cc_buf_len);
-        if (cc_buf != NULL) {
-            vanc_line_insert(&vanc_lines, cc_buf, cc_buf_len, cc_line, 0);
-            delete [] cc_buf;
+        if (cc_line >= 0) {
+            uint16_t *cc_buf = NULL;
+            int cc_buf_len;
+            send_CC(vd, &picture->cc, &cc_buf, &cc_buf_len);
+            if (cc_buf != NULL) {
+                vanc_line_insert(&vanc_lines, cc_buf, cc_buf_len, cc_line, 0);
+                delete [] cc_buf;
+            }
         }
 
         /* Locally generated AFD VANC */
         int afd_line = var_InheritInteger(vd, VIDEO_CFG_PREFIX "afd-line");
-        uint16_t *afd_buf = NULL;
-        int afd_buf_len;
-        send_AFD(&afd_buf, &afd_buf_len);
-        if (afd_buf != NULL) {
-            vanc_line_insert(&vanc_lines, afd_buf, afd_buf_len, afd_line, 0);
-            delete [] afd_buf;
+        if (afd_line >= 0) {
+            uint16_t *afd_buf = NULL;
+            int afd_buf_len;
+            send_AFD(&afd_buf, &afd_buf_len);
+            if (afd_buf != NULL) {
+                vanc_line_insert(&vanc_lines, afd_buf, afd_buf_len, afd_line, 0);
+                delete [] afd_buf;
+            }
         }
 
         /* Handle VANC lines provided by decoders */
