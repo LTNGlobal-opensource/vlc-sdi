@@ -72,6 +72,9 @@
 #include <libklvanc/klbitstream_readwriter.h>
 #include "pes_extractor.h"
 
+#define ENABLE_TEXT N_("Enable SMPTE 2038 decoder")
+#define ENABLE_LONGTEXT N_("Enable processing of SMPTE 2038 messages for output as VANC" )
+
 struct subpicture_updater_sys_t {
     struct decoder_t *p_dec;
     mtime_t i_pts;
@@ -297,12 +300,14 @@ static void Close( vlc_object_t * );
 static subpicture_t *Decode( decoder_t *, block_t ** );
 
 vlc_module_begin ()
+#define SMPTE2038_CFG_PREFIX "smpte2038-"
     set_description( N_("SMPTE 2038 decoder") )
     set_shortname( N_("SMPTE 2038-2008 Carriage of Ancillary Data in an MPEG-2 TS") )
     set_capability( "decoder", 50 )
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_SCODEC )
     set_callbacks( Open, Close )
+    add_bool( SMPTE2038_CFG_PREFIX "enable", true, ENABLE_TEXT, ENABLE_LONGTEXT, false )
 vlc_module_end ()
 
 /*****************************************************************************
@@ -315,11 +320,16 @@ static int Open( vlc_object_t *p_this )
 {
     decoder_t     *p_dec = (decoder_t *) p_this;
     decoder_sys_t *p_sys;
+    bool          enabled;
     
     if( p_dec->fmt_in.i_codec != VLC_CODEC_VANC )
     {
         return VLC_EGENERIC;
     }
+
+    enabled = var_InheritBool( p_dec, SMPTE2038_CFG_PREFIX "enable" );
+    if (!enabled)
+        return VLC_EGENERIC;
 
     p_dec->p_sys = p_sys = calloc( 1, sizeof( *p_sys ) );
     if( p_sys == NULL )

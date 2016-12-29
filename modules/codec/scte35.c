@@ -31,6 +31,9 @@
 #include <libklscte35/scte35.h>
 #include <libklvanc/vanc.h>
 
+#define ENABLE_TEXT N_("Enable SCTE-35 decoder")
+#define ENABLE_LONGTEXT N_("Enable processing of SCTE-35 messages for output as VANC" )
+
 struct subpicture_updater_sys_t {
     uint8_t *buf;
     size_t buf_size;
@@ -176,12 +179,14 @@ static void Close( vlc_object_t * );
 static subpicture_t *Decode( decoder_t *, block_t ** );
 
 vlc_module_begin ()
+#define SCTE35_CFG_PREFIX "scte35-"
     set_description( N_("SCTE-35 decoder") )
     set_shortname( N_("SCTE-35 Digital Program Insertion Cueing") )
     set_capability( "decoder", 50 )
     set_category( CAT_INPUT )
     set_subcategory( SUBCAT_INPUT_SCODEC )
     set_callbacks( Open, Close )
+    add_bool( SCTE35_CFG_PREFIX "enable", true, ENABLE_TEXT, ENABLE_LONGTEXT, false )
 vlc_module_end ()
 
 /*****************************************************************************
@@ -193,11 +198,16 @@ vlc_module_end ()
 static int Open( vlc_object_t *p_this )
 {
     decoder_t     *p_dec = (decoder_t *) p_this;
+    bool          enabled;
 
     if( p_dec->fmt_in.i_codec != VLC_CODEC_SCTE_35 )
     {
         return VLC_EGENERIC;
     }
+
+    enabled = var_InheritBool( p_dec, SCTE35_CFG_PREFIX "enable" );
+    if (!enabled)
+        return VLC_EGENERIC;
 
     p_dec->pf_decode_sub = Decode;
 
