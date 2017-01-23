@@ -1709,6 +1709,19 @@ dnl
 PKG_ENABLE_MODULES_VLC([DVDREAD], [], [dvdread], [dvdread input module], [auto])
 
 dnl
+dnl klbars module: check for libklbars
+dnl
+AC_ARG_ENABLE(klbars,
+  [  --enable-klbars         Kernel Labs color bars input support (default auto)])
+if test "${enable_klbars}" != "no"
+then
+  AC_CHECK_HEADERS(libklbars/klbars.h, [
+    VLC_ADD_PLUGIN([klbars])
+    VLC_ADD_LIBS([klbars],[-lklbars])
+  ],[])
+fi
+
+dnl
 dnl libdvdnav plugin
 dnl
 AC_ARG_ENABLE(dvdnav,

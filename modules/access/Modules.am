@@ -217,6 +217,8 @@ SOURCES_vcdx = \
 SOURCES_dvdnav = dvdnav.c
 SOURCES_dvdread = dvdread.c
 
+SOURCES_klbars = klbars.c
+
 libaccess_bd_plugin_la_SOURCES = bd/bd.c bd/mpls.c bd/mpls.h bd/clpi.c bd/clpi.h
 libaccess_bd_plugin_la_CFLAGS = $(AM_CFLAGS)
 libaccess_bd_plugin_la_LIBADD = $(AM_LIBADD)
