@@ -81,13 +81,10 @@ static void SubpictureTextUpdateScte35(subpicture_t *subpic,
         return;
     }
     
-    struct scte35_context_s scte35;
-    scte35_initialize(&scte35, 0x0123);
-
     /* Convert the SCTE35 message into a SCTE104 command */
     uint8_t *buf;
     uint16_t byteCount;
-    int ret = scte35_create_scte104_message(&scte35, s, &buf, &byteCount);
+    int ret = scte35_create_scte104_message(s, &buf, &byteCount);
     if (ret != 0) {
         fprintf(stderr, "Unable to convert SCTE35 to SCTE104, ret = %d\n", ret);
         return;
