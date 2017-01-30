@@ -85,6 +85,7 @@ struct demux_sys_t
     mtime_t start;
     uint32_t frame_number;
     struct kl_colorbar_context osd_ctx;
+    struct kl_colorbar_audio_context audio_ctx;
     uint32_t width;
     uint32_t height;
     char *customText;
@@ -96,7 +97,7 @@ struct demux_sys_t
     int i_anum_channels;
     int i_asamplerate;
     int i_asamplesize; /* in bits (e.g. 16) */
-    char *audio_data; /* Temporary buffer to hold generated 1Khz tone */
+    unsigned char *audio_data; /* Temporary buffer to hold generated 1Khz tone */
 };
 
 static int InitAudio( demux_t *p_demux )
@@ -190,6 +191,7 @@ void DemuxClose( vlc_object_t *obj )
     vlc_join (sys->thread, NULL);
 
     kl_colorbar_free(&sys->osd_ctx);
+    kl_colorbar_tonegenerator_free(&sys->audio_ctx);
     free( sys->audio_data);
     free( sys );
 }
@@ -203,18 +205,17 @@ static void *klbarsThread (void *data)
     int rowWidth = sys->width * 2;
 
     int buf_size = sys->i_asamplerate * (sys->i_asamplesize / 8) * sys->i_anum_channels;
-    sys->audio_data = (char *) malloc (buf_size);
-    size_t reallen;
-    int curloc = 0;
+    sys->audio_data = (unsigned char *) malloc (buf_size);
 
     /* Setup the sine data once, and we will just stuff the resulting bytes
        in when we generate each rrame of video.  Note that we pre-generate exactly
        one second worth of audio so that we can wraparound the buffer and not
        get a glitch in the waveform */
-    int ret = kl_colorbar_tonegenerator(1000, sys->i_asamplesize,
+    int ret = kl_colorbar_tonegenerator(&sys->audio_ctx, 1000, sys->i_asamplesize,
                                         sys->i_anum_channels, 1000000,
-                                        sys->i_asamplerate, 1, sys->audio_data,
-                                        buf_size, &reallen);
+                                        sys->i_asamplerate, 1);
+    if (ret != 0)
+        return 0;
 
     for (;;)
     {
@@ -241,18 +242,12 @@ static void *klbarsThread (void *data)
         }
         vlc_restorecancel (canc);
 
-        int wrap = 0;
-        int c1_size, c2_size;
-
-        if (curloc + sys->i_ablock_size < reallen) {
-            wrap = 0;
-            c1_size = sys->i_ablock_size;
-        } else {
-            wrap = 1;
-            c1_size = reallen - curloc;
-            c2_size = sys->i_ablock_size - (reallen - curloc);
-        }
-
+        /* Extract the audio from the tone generator once, and propagate
+           across all channels.  We do this using a temporary buffer rather
+           than calling the extract routine for each channel so that the
+           sine wave stays properly aligned.  */
+        kl_colorbar_tonegenerator_extract(&sys->audio_ctx, sys->audio_data,
+                                          sys->i_ablock_size);
         for (int i = 0; i < MAX_AUDIOS; i++)
         {
             klbars_audio_t *p_audio = &sys->p_audios[i];
@@ -260,24 +255,10 @@ static void *klbarsThread (void *data)
             if( unlikely( !p_block ) )
                 continue;
 
-            if (!wrap) {
-                /* We have enough bytes to completely fill the target, so no
-                   need to wrap around */
-                memcpy(p_block->p_buffer, sys->audio_data + curloc, c1_size);
-            } else {
-                memcpy(p_block->p_buffer, sys->audio_data + curloc, c1_size);
-                memcpy(p_block->p_buffer + c1_size, sys->audio_data, c2_size);
-            }
-
+            memcpy(p_block->p_buffer, sys->audio_data, sys->i_ablock_size);
             p_block->i_dts = p_block->i_pts = cur_date;
             p_block->i_length = sys->i_aincr;
             es_out_Send( demux->out, p_audio->p_es, p_block );
-        }
-
-        if (!wrap) {
-            curloc += sys->i_ablock_size;
-        } else {
-            curloc = c2_size;
         }
 
         /* When determining how to sleep, take into account how long it took to actually
