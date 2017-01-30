@@ -67,6 +67,16 @@ vlc_module_begin ()
     set_callbacks( DemuxOpen, DemuxClose )
 vlc_module_end ()
 
+#define MAX_AUDIOS 8
+typedef struct klbars_audio_t
+{
+    int         i_channel; /* i_group * 2 + i_pair */
+
+    /* ES stuff */
+    int         i_id;
+    es_out_id_t *p_es;
+} klbars_audio_t;
+
 struct demux_sys_t
 {
     vlc_thread_t thread;
@@ -78,7 +88,51 @@ struct demux_sys_t
     uint32_t width;
     uint32_t height;
     char *customText;
+
+    /* Audio related */
+    klbars_audio_t p_audios[MAX_AUDIOS];
+    unsigned int i_ablock_size;
+    int i_aincr;
+    int i_anum_channels;
+    int i_asamplerate;
+    int i_asamplesize; /* in bits (e.g. 16) */
+    char *audio_data; /* Temporary buffer to hold generated 1Khz tone */
 };
+
+static int InitAudio( demux_t *p_demux )
+{
+    demux_sys_t *p_sys = p_demux->p_sys;
+    es_format_t fmt;
+
+    p_sys->i_anum_channels = 2;
+    p_sys->i_asamplerate = 48000;
+    p_sys->i_asamplesize = 16;
+
+    for ( int i = 0; i < MAX_AUDIOS; i++ )
+    {
+        klbars_audio_t *p_audio = &p_sys->p_audios[i];
+
+        es_format_Init( &fmt, AUDIO_ES, VLC_FOURCC('a','r','a','w') );
+        fmt.i_id = p_audio->i_id;
+        fmt.audio.i_channels          = p_sys->i_anum_channels;
+        fmt.audio.i_original_channels =
+            fmt.audio.i_physical_channels = AOUT_CHANS_STEREO;
+        fmt.audio.i_rate              = p_sys->i_asamplerate;
+        fmt.audio.i_bitspersample     = p_sys->i_asamplesize;
+        fmt.audio.i_blockalign = fmt.audio.i_channels *
+            fmt.audio.i_bitspersample / 8;
+        fmt.i_bitrate = fmt.audio.i_channels * fmt.audio.i_rate *
+            fmt.audio.i_bitspersample;
+        p_audio->p_es = es_out_Add( p_demux->out, &fmt );
+        p_sys->i_ablock_size = p_sys->i_asamplerate * (p_sys->i_asamplesize / 8) * p_sys->i_anum_channels * 1001 / 30000;
+        p_sys->i_aincr = 1000000. * p_sys->i_ablock_size / p_sys->i_asamplerate / 4;
+    }
+
+    for ( int i = 0 ; i < MAX_AUDIOS; i++ )
+        p_sys->p_audios[i].i_channel = -1;
+
+    return 0;
+}
 
 int DemuxOpen( vlc_object_t *obj )
 {
@@ -92,8 +146,11 @@ int DemuxOpen( vlc_object_t *obj )
     sys->width = var_InheritInteger (obj, CFG_PREFIX"width");
     sys->height = var_InheritInteger (obj, CFG_PREFIX"height");
     sys->customText = var_InheritString (obj, CFG_PREFIX"custom-text");
+    sys->audio_data = NULL;
 
     kl_colorbar_init(&sys->osd_ctx, sys->width, sys->height, KL_COLORBAR_8BIT);
+
+    InitAudio(demux);
 
     /* Declare our unique elementary (video) stream */
     es_format_t es_fmt;
@@ -115,6 +172,7 @@ int DemuxOpen( vlc_object_t *obj )
     demux->info.i_update = 0;
     demux->info.i_title = 0;
     demux->info.i_seekpoint = 0;
+
     return VLC_SUCCESS;
 
 error:
@@ -132,6 +190,7 @@ void DemuxClose( vlc_object_t *obj )
     vlc_join (sys->thread, NULL);
 
     kl_colorbar_free(&sys->osd_ctx);
+    free( sys->audio_data);
     free( sys );
 }
 
@@ -143,11 +202,26 @@ static void *klbarsThread (void *data)
 
     int rowWidth = sys->width * 2;
 
+    int buf_size = sys->i_asamplerate * (sys->i_asamplesize / 8) * sys->i_anum_channels;
+    sys->audio_data = (char *) malloc (buf_size);
+    size_t reallen;
+    int curloc = 0;
+
+    /* Setup the sine data once, and we will just stuff the resulting bytes
+       in when we generate each rrame of video.  Note that we pre-generate exactly
+       one second worth of audio so that we can wraparound the buffer and not
+       get a glitch in the waveform */
+    int ret = kl_colorbar_tonegenerator(1000, sys->i_asamplesize,
+                                        sys->i_anum_channels, 1000000,
+                                        sys->i_asamplerate, 1, sys->audio_data,
+                                        buf_size, &reallen);
+
     for (;;)
     {
         int canc = vlc_savecancel ();
+        mtime_t cur_date = mdate();
         block_t *block = block_Alloc(sys->height * rowWidth);
-        block->i_pts = mdate();
+        block->i_pts = cur_date;
 
         kl_colorbar_fill_colorbars(&sys->osd_ctx);
 
@@ -166,7 +240,50 @@ static void *klbarsThread (void *data)
             es_out_Send (demux->out, sys->es, block);
         }
         vlc_restorecancel (canc);
-        usleep(33000);
+
+        int wrap = 0;
+        int c1_size, c2_size;
+
+        if (curloc + sys->i_ablock_size < reallen) {
+            wrap = 0;
+            c1_size = sys->i_ablock_size;
+        } else {
+            wrap = 1;
+            c1_size = reallen - curloc;
+            c2_size = sys->i_ablock_size - (reallen - curloc);
+        }
+
+        for (int i = 0; i < MAX_AUDIOS; i++)
+        {
+            klbars_audio_t *p_audio = &sys->p_audios[i];
+            block_t *p_block = block_Alloc( sys->i_ablock_size );
+            if( unlikely( !p_block ) )
+                continue;
+
+            if (!wrap) {
+                /* We have enough bytes to completely fill the target, so no
+                   need to wrap around */
+                memcpy(p_block->p_buffer, sys->audio_data + curloc, c1_size);
+            } else {
+                memcpy(p_block->p_buffer, sys->audio_data + curloc, c1_size);
+                memcpy(p_block->p_buffer + c1_size, sys->audio_data, c2_size);
+            }
+
+            p_block->i_dts = p_block->i_pts = cur_date;
+            p_block->i_length = sys->i_aincr;
+            es_out_Send( demux->out, p_audio->p_es, p_block );
+        }
+
+        if (!wrap) {
+            curloc += sys->i_ablock_size;
+        } else {
+            curloc = c2_size;
+        }
+
+        /* When determining how to sleep, take into account how long it took to actually
+           generate the frame */
+        mtime_t now = mdate();
+        usleep(33367 - (now - cur_date));
     }
 
     assert (0);
