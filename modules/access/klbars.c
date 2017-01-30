@@ -73,7 +73,6 @@ typedef struct klbars_audio_t
     int         i_channel; /* i_group * 2 + i_pair */
 
     /* ES stuff */
-    int         i_id;
     es_out_id_t *p_es;
 } klbars_audio_t;
 
@@ -114,7 +113,7 @@ static int InitAudio( demux_t *p_demux )
         klbars_audio_t *p_audio = &p_sys->p_audios[i];
 
         es_format_Init( &fmt, AUDIO_ES, VLC_FOURCC('a','r','a','w') );
-        fmt.i_id = p_audio->i_id;
+        fmt.i_id = i;
         fmt.audio.i_channels          = p_sys->i_anum_channels;
         fmt.audio.i_original_channels =
             fmt.audio.i_physical_channels = AOUT_CHANS_STEREO;
