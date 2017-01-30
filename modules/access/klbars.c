@@ -263,7 +263,9 @@ static void *klbarsThread (void *data)
         /* When determining how to sleep, take into account how long it took to actually
            generate the frame */
         mtime_t now = mdate();
-        usleep(33367 - (now - cur_date));
+        mtime_t wait_time = 33367 - (now - cur_date);
+        if (wait_time > 0)
+            usleep(wait_time);
     }
 
     assert (0);
