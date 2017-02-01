@@ -75,8 +75,8 @@ static void SubpictureTextUpdateScte35(subpicture_t *subpic,
     subpic->i_original_picture_width  = fmt_dst->i_width * fmt_dst->i_sar_num / fmt_dst->i_sar_den;
     subpic->i_original_picture_height = fmt_dst->i_height;
 
-	struct scte35_splice_info_section_s *s = scte35_splice_info_section_parse(sys->buf, sys->buf_size);
-	if (s == NULL) {
+    struct scte35_splice_info_section_s *s = scte35_splice_info_section_parse(sys->buf, sys->buf_size);
+    if (s == NULL) {
         fprintf(stderr, "Failed to splice section \n");
         return;
     }
