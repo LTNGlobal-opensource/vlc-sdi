@@ -67,6 +67,7 @@ static void SubpictureTextUpdateScte35(subpicture_t *subpic,
                                        mtime_t ts)
 {
     subpicture_updater_sys_t *sys = subpic->updater.p_sys;
+    int ret;
     VLC_UNUSED(fmt_src); VLC_UNUSED(ts);
 
     if (fmt_dst->i_sar_num <= 0 || fmt_dst->i_sar_den <= 0)
@@ -74,24 +75,6 @@ static void SubpictureTextUpdateScte35(subpicture_t *subpic,
 
     subpic->i_original_picture_width  = fmt_dst->i_width * fmt_dst->i_sar_num / fmt_dst->i_sar_den;
     subpic->i_original_picture_height = fmt_dst->i_height;
-
-    struct scte35_splice_info_section_s *s = scte35_splice_info_section_parse(sys->buf, sys->buf_size);
-    if (s == NULL) {
-        fprintf(stderr, "Failed to splice section \n");
-        return;
-    }
-    
-    /* Convert the SCTE35 message into a SCTE104 command */
-    uint8_t *buf;
-    uint16_t byteCount;
-    int ret = scte35_create_scte104_message(s, &buf, &byteCount);
-    if (ret != 0) {
-        fprintf(stderr, "Unable to convert SCTE35 to SCTE104, ret = %d\n", ret);
-        return;
-    }
-
-    /* Free the allocated resource */
-    scte35_splice_info_section_free(s);
 
 #if 0
     fprintf(stderr, "SCTE104 formatted message : ");
@@ -108,7 +91,7 @@ static void SubpictureTextUpdateScte35(subpicture_t *subpic,
      */
     uint16_t *vancWords = NULL;
     uint16_t vancWordCount;
-    ret = vanc_sdi_create_payload(0x07, 0x41, buf, byteCount, &vancWords, &vancWordCount, 10);
+    ret = vanc_sdi_create_payload(0x07, 0x41, sys->buf, sys->buf_size, &vancWords, &vancWordCount, 10);
     if (ret != 0) {
         fprintf(stderr, "Error creating VANC message, ret = %d\n", ret);
         return;
@@ -120,8 +103,6 @@ static void SubpictureTextUpdateScte35(subpicture_t *subpic,
         printf("%03x ", *(vancWords + i));
     printf("\n");
 #endif
-
-    free(buf); /* Free the allocated resource */
 
     /* Create a VLC subpicture with the VANC line */
     video_format_t fmt;
@@ -228,6 +209,7 @@ static subpicture_t *Decode( decoder_t *p_dec, block_t **pp_block )
 {
     block_t       *p_block;
     subpicture_t  *p_spu = NULL;
+    struct scte35_splice_info_section_s *s;
 
     if( ( pp_block == NULL ) || ( *pp_block == NULL ) )
     {
@@ -254,12 +236,33 @@ static subpicture_t *Decode( decoder_t *p_dec, block_t **pp_block )
         
         p_spu->b_ephemer  = false;
         p_spu->b_absolute = true;
-        
-        p_spu_sys->buf = calloc(1, p_block->i_buffer);
-        if (p_spu_sys->buf != NULL) {
-            memcpy(p_spu_sys->buf, p_block->p_buffer, p_block->i_buffer);
-            p_spu_sys->buf_size = p_block->i_buffer;
+
+        s = scte35_splice_info_section_parse(p_block->p_buffer,
+                                             p_block->i_buffer);
+        if (s == NULL) {
+            fprintf(stderr, "Failed to splice section \n");
+            return NULL;
         }
+
+        /* Convert the SCTE35 message into a SCTE104 command */
+        uint8_t *buf;
+        uint16_t byteCount;
+        int ret = scte35_create_scte104_message(s, &buf, &byteCount, p_block->i_pts * 9 / 100);
+        if (ret != 0) {
+            fprintf(stderr, "Unable to convert SCTE35 to SCTE104, ret = %d\n", ret);
+            scte35_splice_info_section_free(s);
+            return NULL;
+        }
+
+        /* Free the allocated resource */
+        scte35_splice_info_section_free(s);
+        
+        p_spu_sys->buf = calloc(1, byteCount);
+        if (p_spu_sys->buf != NULL) {
+            memcpy(p_spu_sys->buf, buf, byteCount);
+            p_spu_sys->buf_size = byteCount;
+        }
+        free(buf); /* Free the allocated resource */
     }
 
     block_Release( p_block );
