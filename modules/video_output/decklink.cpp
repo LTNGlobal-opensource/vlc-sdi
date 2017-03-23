@@ -1278,9 +1278,22 @@ static int createAudioSource(audio_output_t *aout)
 			s->nr = ++g_audio_source_count;
 			s->aout = aout;
 			s->fifo = block_FifoNew();
-			//printf("Created Audio Source[%d] nr = %d aout=%p\n", i, s->nr, s->aout);
 			ret = 0;
 			break;
+		} else if (s->aout && (aout->i_id < s->aout->i_id)) {
+		  for (int j = MAX_AUDIO_SOURCES - 2; j > i; j--) {
+		    struct audio_source_s *a = &audioSources[j];
+		    struct audio_source_s *b = &audioSources[j-1];
+		    a->nr = b->nr ? b->nr + 1 : 0;
+		    a->aout = b->aout;
+		    a->fifo = b->fifo;
+		  }
+		  s->nr = i + 1;
+		  ++g_audio_source_count;
+		  s->aout = aout;
+		  s->fifo = block_FifoNew();
+		  ret = 0;
+		  break;
 		}
 	}
 	vlc_mutex_unlock(&g_audio_source_lock);
@@ -1346,10 +1359,6 @@ static int TimeGet(audio_output_t *, mtime_t* restrict)
 
 static int Start(audio_output_t *aout, audio_sample_format_t *restrict fmt)
 {
-    struct audio_source_s *s = findAudioSource(aout);
-    if (!s)
-        return VLC_EGENERIC;
-
     struct decklink_sys_t *decklink_sys = GetDLSys(VLC_OBJECT(aout));
 
     if (decklink_sys->i_rate == 0)
@@ -1362,6 +1371,8 @@ static int Start(audio_output_t *aout, audio_sample_format_t *restrict fmt)
     fmt->i_bitspersample = 16;
     fmt->i_blockalign = fmt->i_channels * fmt->i_bitspersample /8 ;
     fmt->i_frame_length  = FRAME_SIZE;
+
+    createAudioSource(aout);
 
     return VLC_SUCCESS;
 }
@@ -1534,8 +1545,6 @@ static int OpenAudio(vlc_object_t *p_this)
 {
     audio_output_t *aout = (audio_output_t *)p_this;
     struct decklink_sys_t *decklink_sys = GetDLSys(VLC_OBJECT(aout));
-
-    createAudioSource((audio_output_t *)p_this);
 
     vlc_mutex_lock(&decklink_sys->lock);
     decklink_sys->aconn = getAConn(aout);

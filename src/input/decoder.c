@@ -2229,6 +2229,8 @@ static block_t *aout_new_buffer( decoder_t *p_dec, int i_samples )
         p_aout = input_resource_GetAout( p_owner->p_resource );
         if( p_aout )
         {
+            if (p_aout->i_id == 0)
+                p_aout->i_id = p_dec->fmt_in.i_id;
             aout_FormatPrepare( &format );
             if( aout_DecNew( p_aout, &format,
                              &p_dec->fmt_out.audio_replay_gain,

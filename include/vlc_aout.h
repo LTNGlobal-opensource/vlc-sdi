@@ -113,6 +113,8 @@ struct audio_output
 
     struct aout_sys_t *sys; /**< Private data for callbacks */
 
+    int i_id; /* Hack to propagate PID down ot audio output */
+    
     int (*start)(audio_output_t *, audio_sample_format_t *fmt);
     /**< Starts a new stream (mandatory, cannot be NULL).
       * \param fmt input stream sample format upon entry,
