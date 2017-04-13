@@ -69,7 +69,6 @@
 #include <vlc_codec.h>
 
 #include <libklvanc/vanc.h>
-#include <libklvanc/klbitstream_readwriter.h>
 #include "pes_extractor.h"
 
 #define ENABLE_TEXT N_("Enable SMPTE 2038 decoder")
