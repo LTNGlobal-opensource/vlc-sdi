@@ -1281,7 +1281,7 @@ static int createAudioSource(audio_output_t *aout)
 			ret = 0;
 			break;
 		} else if (s->aout && (aout->i_id < s->aout->i_id)) {
-		  for (int j = MAX_AUDIO_SOURCES - 2; j > i; j--) {
+		  for (int j = MAX_AUDIO_SOURCES - 1; j > i; j--) {
 		    struct audio_source_s *a = &audioSources[j];
 		    struct audio_source_s *b = &audioSources[j-1];
 		    a->nr = b->nr ? b->nr + 1 : 0;
