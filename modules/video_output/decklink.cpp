@@ -173,6 +173,7 @@ struct vout_display_sys_t
 struct decklink_sys_t
 {
     IDeckLinkOutput *p_output;
+    const char *psz_model_name;
 
     /*
      * Synchronizes aout and vout modules:
@@ -191,6 +192,7 @@ struct decklink_sys_t
 
     int i_width;
     int i_height;
+    bool b_psf_interlaced;
 
     BMDTimeScale timescale;
     BMDTimeValue frameduration;
@@ -390,6 +392,21 @@ end:
     return conn;
 }
 
+/* PSF is a feature specific to 1080p video (i.e. it doesn't occur with other
+   resolutions.  Hence I'm not worried about computing the switching line based
+   on the height given the only valid height will be 1080 */
+#define SWITCHING_LINE_1080 569
+static int Calculate1080psfVancLine(int cc_line)
+{
+    int val = cc_line;
+    if (cc_line <= 20)
+        val = cc_line * 2;
+    if (cc_line >= 564)
+        val = 2 * (cc_line - (SWITCHING_LINE_1080 - 6)) + 1;
+
+    return val;
+}
+
 /*****************************************************************************
  *
  *****************************************************************************/
@@ -461,11 +478,10 @@ static struct decklink_sys_t *OpenDecklink(vout_display_t *vd)
         CHECK("Card not found");
     }
 
-    const char *psz_model_name;
-    result = p_card->GetModelName(&psz_model_name);
+    result = p_card->GetModelName(&decklink_sys->psz_model_name);
     CHECK("Unknown model name");
 
-    msg_Dbg(vd, "Opened DeckLink PCI card %s", psz_model_name);
+    msg_Dbg(vd, "Opened DeckLink PCI card %s", decklink_sys->psz_model_name);
 
     result = p_card->QueryInterface(IID_IDeckLinkOutput,
         (void**)&decklink_sys->p_output);
@@ -570,6 +586,20 @@ static struct decklink_sys_t *OpenDecklink(vout_display_t *vd)
         result = decklink_sys->p_output->EnableVideoOutput(mode_id, flags);
         CHECK("Could not enable video output");
 
+        decklink_sys->b_psf_interlaced = false;
+        if ((strcmp(decklink_sys->psz_model_name, "DeckLink Duo 2") == 0) &&
+            mode_id == bmdModeHD1080p2997)
+        {
+            /* Check the video output status and see if PSF is enabled.  This impacts
+               how we specify VANC line numbers to output to... */
+            bool val;
+            result = p_config->GetFlag(bmdDeckLinkConfigUse1080pNotPsF, &val);
+            if (result == S_OK && val == false)
+            {
+                /* We are in PSF mode */
+                decklink_sys->b_psf_interlaced = true;
+            }
+        }
         break;
     }
 
@@ -1038,15 +1068,21 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
         for (int i = 0; i < vanc_lines.num_lines; i++) {
             struct vanc_line_s *line = vanc_lines.lines[i];
             uint16_t *out_line;
+            int real_line;
             int out_len;
             void *buf;
 
             if (line == NULL)
                 break;
-            result = vanc->GetBufferForVerticalBlankingLine(line->line_number, &buf);
+
+            real_line = line->line_number;
+            if (decklink_sys->b_psf_interlaced)
+                real_line = Calculate1080psfVancLine(line->line_number);
+
+            result = vanc->GetBufferForVerticalBlankingLine(real_line, &buf);
             if (result != S_OK) {
-                msg_Err(vd, "Failed to get VANC line %d: %d", line->line_number, result);
-                return;
+                msg_Err(vd, "Failed to get VANC line %d: %d", real_line, result);
+                continue;
             }
 
             /* Generate the full line taking into account all VANC packets on that line */
