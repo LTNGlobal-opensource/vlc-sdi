@@ -1046,7 +1046,7 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
             result = vanc->GetBufferForVerticalBlankingLine(line->line_number, &buf);
             if (result != S_OK) {
                 msg_Err(vd, "Failed to get VANC line %d: %d", line->line_number, result);
-                return;
+                continue;
             }
 
             /* Generate the full line taking into account all VANC packets on that line */
