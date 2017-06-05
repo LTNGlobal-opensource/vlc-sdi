@@ -1591,12 +1591,11 @@ static int OpenAudio(vlc_object_t *p_this)
     vlc_mutex_unlock(&decklink_sys->lock);
 
     /* Initialize remap table for passthrough */
-	for (int i = 0; i < MAX_AUDIO_SOURCES; i++) {
+    for (int i = 0; i < MAX_AUDIO_SOURCES; i++)
         decklink_sys->remap_table[i] = i;
-	}
 
-	char *remap_string = var_InheritString(p_this, AUDIO_CFG_PREFIX "channel-map");
-	//    char *remap_string = "G2P2:G1P2:G8P1";
+    char *remap_string = var_InheritString(p_this, AUDIO_CFG_PREFIX "channel-map");
+    //    char *remap_string = "G2P2:G1P2:G8P1";
     if (remap_string) {
         /* If the user specifies a remap table, all non-specified channels
            should be discarded */
