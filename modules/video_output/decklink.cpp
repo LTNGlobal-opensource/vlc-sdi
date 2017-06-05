@@ -1445,64 +1445,65 @@ static void interleaveAudio(unsigned char *inbuf, unsigned char *out, int num_sa
 static block_t *audioFramer(struct decklink_sys_t *decklink_sys, block_t *firstchan_block,
 			    int firstchan_num)
 {
-   block_t *final_block = block_Alloc(firstchan_block->i_buffer * MAX_AUDIO_SOURCES);
-   memset(final_block->p_buffer, 0, final_block->i_buffer);
-   final_block->i_pts = firstchan_block->i_pts;
-   final_block->i_nb_samples = firstchan_block->i_nb_samples;
+    block_t *final_block = block_Alloc(firstchan_block->i_buffer * MAX_AUDIO_SOURCES);
+    memset(final_block->p_buffer, 0, final_block->i_buffer);
+    final_block->i_pts = firstchan_block->i_pts;
+    final_block->i_nb_samples = firstchan_block->i_nb_samples;
 
-   vlc_mutex_lock(&g_audio_source_lock);
+    vlc_mutex_lock(&g_audio_source_lock);
 
-   /* Handle the first channel differently than the others since we
-      already dequeued the block for it */
-   interleaveAudio(firstchan_block->p_buffer, final_block->p_buffer,
-		   firstchan_block->i_nb_samples,
-		   decklink_sys->remap_table[firstchan_num]);
+    /* Handle the first channel differently than the others since we
+       already dequeued the block for it */
+    interleaveAudio(firstchan_block->p_buffer, final_block->p_buffer,
+                    firstchan_block->i_nb_samples,
+                    decklink_sys->remap_table[firstchan_num]);
 
-   /* Handle all the other channels */
-   for (int i = 0; i < MAX_AUDIO_SOURCES; i++) {
-      if (audioSources[i].nr == 0 || audioSources[i].nr == 1)
-	  continue;
-      block_t *blk = block_FifoShow(audioSources[i].fifo);
-      long int delta = firstchan_block->i_pts - blk->i_pts;
+    /* Handle all the other channels */
+    for (int i = 0; i < MAX_AUDIO_SOURCES; i++)
+    {
+        if (audioSources[i].nr == 0 || audioSources[i].nr == 1)
+            continue;
+        block_t *blk = block_FifoShow(audioSources[i].fifo);
+        long int delta = firstchan_block->i_pts - blk->i_pts;
 
-      if (delta < -30000) {
-	/* Because the earliest block in this queue is much later than the
-	   PTS of the first channel, we're going to be putting out audio
-	   silence on this channel until we get to that block.  So let's
-	   keep the block on the queue until the first channel catches up
-	   to that point... */
-	continue;
-      }
+        if (delta < -30000) {
+            /* Because the earliest block in this queue is much later than the
+               PTS of the first channel, we're going to be putting out audio
+               silence on this channel until we get to that block.  So let's
+               keep the block on the queue until the first channel catches up
+               to that point... */
+            continue;
+        }
 
-      /* Throw away samples that are way too old */
-      int found = 0;
-      while (block_FifoSize(audioSources[i].fifo) > MIN_FIFO_SIZE) {
-	blk = block_FifoShow(audioSources[i].fifo);
-	delta = firstchan_block->i_pts - blk->i_pts;
-	if (delta < 30000) {
-	  found = 1;
-	  break;
-	}
+        /* Throw away samples that are way too old */
+        int found = 0;
+        while (block_FifoSize(audioSources[i].fifo) > MIN_FIFO_SIZE) {
+            blk = block_FifoShow(audioSources[i].fifo);
+            delta = firstchan_block->i_pts - blk->i_pts;
+            if (delta < 30000) {
+                found = 1;
+                break;
+            }
 
-	blk = block_FifoGet(audioSources[i].fifo);
-	block_Release(blk);
-      }
+            blk = block_FifoGet(audioSources[i].fifo);
+            block_Release(blk);
+        }
 
-      /* Either we found a reasonably recent sample or we ran discarded all the
-	 available items in the FIFO and ran out of samples to look at */
-      if (found == 0)
-	continue;
+        /* Either we found a reasonably recent sample or we ran discarded all the
+           available items in the FIFO and ran out of samples to look at */
+        if (found == 0)
+            continue;
 
-      blk = block_FifoGet(audioSources[i].fifo);
-      interleaveAudio(blk->p_buffer, final_block->p_buffer,
-		      firstchan_block->i_nb_samples,
-		      decklink_sys->remap_table[i]);
-      block_Release(blk);
-   }
+        blk = block_FifoGet(audioSources[i].fifo);
+        interleaveAudio(blk->p_buffer, final_block->p_buffer,
+                        firstchan_block->i_nb_samples,
+                        decklink_sys->remap_table[i]);
+        block_Release(blk);
+    }
 
-   vlc_mutex_unlock(&g_audio_source_lock);
+    vlc_mutex_unlock(&g_audio_source_lock);
 
-   return final_block;
+    return final_block;
 }
 
 static void PlayAudio(audio_output_t *aout, block_t *audio)
