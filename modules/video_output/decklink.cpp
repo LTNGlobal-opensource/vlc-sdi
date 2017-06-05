@@ -1432,6 +1432,10 @@ static void interleaveAudio(unsigned char *inbuf, unsigned char *out, int num_sa
 			    int out_channel)
 {
     int x = out_channel * 4;
+
+    if (out_channel < 0)
+        return;
+
     for (int c = 0; c < num_samples * 4; c++) {
        out[x] = inbuf[c++];
        out[x+1] = inbuf[c++];
