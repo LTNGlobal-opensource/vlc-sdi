@@ -1787,7 +1787,11 @@ then
   AC_CHECK_HEADERS(DeckLinkAPIDispatch.cpp, [
       have_decklink=yes
   ], [
-      AC_MSG_WARN(Blackmagic DeckLink SDI include files not found, decklink disabled)
+    AS_IF([test -n "${with_decklink_sdk}"], [
+      AC_MSG_ERROR([Blackmagic DeckLink SDI include files not found])
+    ], [
+      AC_MSG_WARN([Blackmagic DeckLink SDI include files not found, decklink disabled])
+    ])
   ])
   AC_LANG_POP(C++)
   VLC_RESTORE_FLAGS
