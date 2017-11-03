@@ -1294,6 +1294,7 @@ static void destroyAudioSources()
 
 		s->nr = 0;
 		block_FifoRelease(s->fifo);
+		g_audio_source_count--;
 	}
 }
 
@@ -1306,6 +1307,7 @@ static void destroyAudioSource(audio_output_t *aout)
 			s->nr = 0;
 			s->aout = 0;
 			block_FifoRelease(s->fifo);
+			g_audio_source_count--;
 			break;
 		}
 	}
@@ -1424,6 +1426,11 @@ static int Start(audio_output_t *aout, audio_sample_format_t *restrict fmt)
     createAudioSource(aout);
 
     return VLC_SUCCESS;
+}
+
+static void Stop (audio_output_t *aout)
+{
+    destroyAudioSource(aout);
 }
 
 static int groupPairStringToSlot(const char *grouppair)
@@ -1672,7 +1679,7 @@ static int OpenAudio(vlc_object_t *p_this)
     aout->time_get  = TimeGet;
 
     aout->pause     = NULL;
-    aout->stop      = NULL;
+    aout->stop      = Stop;
     aout->mute_set  = NULL;
     aout->volume_set= NULL;
 
