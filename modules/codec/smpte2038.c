@@ -147,8 +147,8 @@ static void SubpictureTextUpdateSmpte2038(subpicture_t *subpic,
         }
 #endif
 
-        struct smpte2038_anc_data_packet_s *pkt = 0;
-        smpte2038_parse_pes_packet(p_block->p_buffer, p_block->i_buffer, &pkt);
+        struct klvanc_smpte2038_anc_data_packet_s *pkt = 0;
+        klvanc_smpte2038_parse_pes_packet(p_block->p_buffer, p_block->i_buffer, &pkt);
         block_Release(p_block);
         if (pkt == NULL) {
             fprintf(stderr, "%s failed to decode PES packet\n", __func__);
@@ -156,11 +156,11 @@ static void SubpictureTextUpdateSmpte2038(subpicture_t *subpic,
         }
     
         for (int i = 0; i < pkt->lineCount; i++) {
-            struct smpte2038_anc_data_line_s *l = &pkt->lines[i];
+            struct klvanc_smpte2038_anc_data_line_s *l = &pkt->lines[i];
             uint16_t *vancWords = NULL;
             uint16_t vancWordCount;
 
-            if (smpte2038_convert_line_to_words(l, &vancWords, &vancWordCount) < 0)
+            if (klvanc_smpte2038_convert_line_to_words(l, &vancWords, &vancWordCount) < 0)
                 break;
 
 #if 0
@@ -193,7 +193,7 @@ static void SubpictureTextUpdateSmpte2038(subpicture_t *subpic,
 
             free(vancWords); /* Free the allocated resource */
         }
-        smpte2038_anc_data_packet_free(pkt);
+        klvanc_smpte2038_anc_data_packet_free(pkt);
     }
 }
 
@@ -226,10 +226,10 @@ static pes_extractor_callback pes_cb(void *cb_context, uint8_t *buf, int byteCou
 {
     struct decoder_t *p_dec = cb_context;
     struct decoder_sys_t *p_sys = p_dec->p_sys;
-    struct smpte2038_anc_data_packet_s *pkt = 0;
+    struct klvanc_smpte2038_anc_data_packet_s *pkt = 0;
     subpicture_t  *p_spu = NULL;
     
-    smpte2038_parse_pes_packet(buf, byteCount, &pkt);
+    klvanc_smpte2038_parse_pes_packet(buf, byteCount, &pkt);
     if (pkt == NULL) {
         fprintf(stderr, "%s failed to decode PES packet\n", __func__);
         return 0;
@@ -247,7 +247,7 @@ static pes_extractor_callback pes_cb(void *cb_context, uint8_t *buf, int byteCou
         p_spu = decoder_NewSubpictureSmpte2038( p_dec );
         if (p_spu == NULL) {
             fprintf(stderr, "Failed to allocate subpicture 2038\n");
-            smpte2038_anc_data_packet_free(pkt);
+            klvanc_smpte2038_anc_data_packet_free(pkt);
             return 0;
         }
         
@@ -277,14 +277,14 @@ static pes_extractor_callback pes_cb(void *cb_context, uint8_t *buf, int byteCou
     /* Stick the PES onto a queue to be interpreted at display time */
     block_t *p_block = block_Alloc(byteCount);
     if (p_block == NULL) {
-        smpte2038_anc_data_packet_free(pkt);
+        klvanc_smpte2038_anc_data_packet_free(pkt);
         return 0;
     }
 
     p_block->i_pts = pkt->PTS;
     memcpy(p_block->p_buffer, buf, byteCount);
     block_FifoPut(p_sys->fifo, p_block);
-    smpte2038_anc_data_packet_free(pkt);
+    klvanc_smpte2038_anc_data_packet_free(pkt);
 
     return 0;
 }

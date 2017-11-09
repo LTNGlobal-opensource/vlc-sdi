@@ -91,7 +91,7 @@ static void SubpictureTextUpdateScte35(subpicture_t *subpic,
      */
     uint16_t *vancWords = NULL;
     uint16_t vancWordCount;
-    ret = vanc_sdi_create_payload(0x07, 0x41, sys->buf, sys->buf_size, &vancWords, &vancWordCount, 10);
+    ret = klvanc_sdi_create_payload(0x07, 0x41, sys->buf, sys->buf_size, &vancWords, &vancWordCount, 10);
     if (ret != 0) {
         fprintf(stderr, "Error creating VANC message, ret = %d\n", ret);
         return;

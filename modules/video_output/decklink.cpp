@@ -961,7 +961,7 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
     vout_display_sys_t *sys = vd->sys;
     struct decklink_sys_t *decklink_sys = GetDLSys(VLC_OBJECT(vd));
     mtime_t now = mdate();
-    struct vanc_line_set_s vanc_lines;
+    struct klvanc_line_set_s vanc_lines;
     memset(&vanc_lines, 0, sizeof(vanc_lines));
 
     if (!picture)
@@ -1035,7 +1035,7 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
             int cc_buf_len;
             send_CC(vd, &picture->cc, &cc_buf, &cc_buf_len);
             if (cc_buf != NULL) {
-                vanc_line_insert(&vanc_lines, cc_buf, cc_buf_len, cc_line, 0);
+                klvanc_line_insert(&vanc_lines, cc_buf, cc_buf_len, cc_line, 0);
                 delete [] cc_buf;
             }
         }
@@ -1047,7 +1047,7 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
             int afd_buf_len;
             send_AFD(&afd_buf, &afd_buf_len);
             if (afd_buf != NULL) {
-                vanc_line_insert(&vanc_lines, afd_buf, afd_buf_len, afd_line, 0);
+                klvanc_line_insert(&vanc_lines, afd_buf, afd_buf_len, afd_line, 0);
                 delete [] afd_buf;
             }
         }
@@ -1058,15 +1058,15 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
                  r = r->p_next) {
                 if (r->fmt.i_chroma != VLC_CODEC_VANC)
                     continue;
-                vanc_line_insert(&vanc_lines, (uint16_t *) r->p_picture->Y_PIXELS,
-                                 r->fmt.i_width / sizeof(uint16_t), r->i_y, r->i_x);
+                klvanc_line_insert(&vanc_lines, (uint16_t *) r->p_picture->Y_PIXELS,
+                                   r->fmt.i_width / sizeof(uint16_t), r->i_y, r->i_x);
             }
         }
 
         /* Now that we've got all the VANC lines in a nice orderly manner, generate the
            final VANC sections for the Decklink output */
         for (int i = 0; i < vanc_lines.num_lines; i++) {
-            struct vanc_line_s *line = vanc_lines.lines[i];
+            struct klvanc_line_s *line = vanc_lines.lines[i];
             uint16_t *out_line;
             int real_line;
             int out_len;
@@ -1086,12 +1086,12 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
             }
 
             /* Generate the full line taking into account all VANC packets on that line */
-            generate_vanc_line(line, &out_line, &out_len, w);
+            klvanc_generate_vanc_line(line, &out_line, &out_len, w);
 
             /* Repack the 16-bit ints into 10-bit, and push into final buffer */
             send_vanc_msg((uint8_t *) buf, out_line, out_len);
             free(out_line);
-            vanc_line_free(line);
+            klvanc_line_free(line);
         }
 
         v210_convert(frame_bytes, picture, stride);
