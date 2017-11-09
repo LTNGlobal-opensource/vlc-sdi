@@ -67,6 +67,10 @@
  */
 #define MIN_FIFO_SIZE (48000 * 2 * 2 / 30)
 
+/* Decklink hardware is advertised to have a 1 second audio buffer, but
+   let's set the high watermark at 900ms to be safe */
+#define AUDIOHW_FIFO_HIGH_WATERMARK 900000
+
 static void initAudioSources();
 static void destroyAudioSources();
 
@@ -191,6 +195,9 @@ struct decklink_sys_t
     int64_t i_max_audio_channels;
     int remap_table[MAX_AUDIO_SOURCES];
 
+    /* To handle buffers queued > 1000ms in the future */
+    block_fifo_t   *audioOutputFifo;
+
     int i_width;
     int i_height;
     bool b_psf_interlaced;
@@ -309,6 +316,7 @@ static struct decklink_sys_t *GetDLSys(vlc_object_t *obj)
             }
             vlc_mutex_init(&sys->lock);
             vlc_cond_init(&sys->cond);
+            sys->audioOutputFifo = block_FifoNew();
             var_Create(libvlc, "decklink-sys", VLC_VAR_ADDRESS);
             var_SetAddress(libvlc, "decklink-sys", (void*)sys);
         }
@@ -1216,6 +1224,7 @@ static void destroyAudioSources()
 
 		s->nr = 0;
 		block_FifoRelease(s->fifo);
+		g_audio_source_count--;
 	}
 }
 
@@ -1228,6 +1237,7 @@ static void destroyAudioSource(audio_output_t *aout)
 			s->nr = 0;
 			s->aout = 0;
 			block_FifoRelease(s->fifo);
+			g_audio_source_count--;
 			break;
 		}
 	}
@@ -1309,6 +1319,11 @@ static void Flush (audio_output_t *aout, bool drain)
     if (!p_output)
         return;
 
+    if (decklink_sys->audioOutputFifo) {
+        block_FifoRelease(decklink_sys->audioOutputFifo);
+        decklink_sys->audioOutputFifo = block_FifoNew();
+    }
+
     if (drain) {
         uint32_t samples;
         decklink_sys->p_output->GetBufferedAudioSampleFrameCount(&samples);
@@ -1341,6 +1356,11 @@ static int Start(audio_output_t *aout, audio_sample_format_t *restrict fmt)
     createAudioSource(aout);
 
     return VLC_SUCCESS;
+}
+
+static void Stop (audio_output_t *aout)
+{
+    destroyAudioSource(aout);
 }
 
 static int groupPairStringToSlot(const char *grouppair)
@@ -1440,8 +1460,31 @@ static block_t *audioFramer(struct decklink_sys_t *decklink_sys, block_t *firstc
     return final_block;
 }
 
+static void ScheduleAudioSamples(IDeckLinkOutput *p_output, audio_output_t *aout, block_t *blk)
+{
+    uint32_t written;
+
+    report(aout, "PLAY AUDIO BYTES", (uint64_t) blk->i_buffer);
+
+    HRESULT result = p_output->ScheduleAudioSamples(blk->p_buffer, blk->i_nb_samples,
+                                                    blk->i_pts, CLOCK_FREQ, &written);
+    if (result != S_OK) {
+        msg_Err(aout, "Failed to schedule audio sample: 0x%X", result);
+        report(aout, "ERROR AUDIO", (uint64_t)result);
+    }
+    else if (blk->i_nb_samples != written) {
+        msg_Err(aout, "Written only %d samples out of %d", written, blk->i_nb_samples);
+        report(aout, "ERROR AUDIO SAMPLES LOST", (uint64_t)(blk->i_nb_samples - written));
+    }
+
+    uint32_t samples;
+    p_output->GetBufferedAudioSampleFrameCount(&samples);
+    report(aout, "AUDIO BUFFERED SAMPLES", samples);
+}
+
 static void PlayAudio(audio_output_t *aout, block_t *audio)
 {
+    mtime_t now = mdate();
     struct audio_source_s *s = findAudioSource(aout);
     if (!s)
         return;
@@ -1491,25 +1534,26 @@ static void PlayAudio(audio_output_t *aout, block_t *audio)
     block_t *p_final = audioFramer(decklink_sys, firstchan_block, s->nr - 1);
     block_Release(firstchan_block);
 
-    uint32_t written;
-    HRESULT result = p_output->ScheduleAudioSamples(p_final->p_buffer, p_final->i_nb_samples, 
-						    p_final->i_pts, CLOCK_FREQ, &written);
+    /* Dequeue any buffers in the FIFO which are now available */
+    while (block_FifoSize(decklink_sys->audioOutputFifo) > 0) {
+        block_t *blk = block_FifoShow(decklink_sys->audioOutputFifo);
+        if (blk->i_pts > now + AUDIOHW_FIFO_HIGH_WATERMARK)
+            break;
 
-    report(aout, "PLAY AUDIO BYTES", (uint64_t)audio->i_buffer);
-
-    uint32_t samples;
-    p_output->GetBufferedAudioSampleFrameCount(&samples);
-    report(aout, "AUDIO BUFFERED SAMPLES", samples);
-
-    if (result != S_OK) {
-        msg_Err(aout, "Failed to schedule audio sample: 0x%X", result);
-        report(aout, "ERROR AUDIO", (uint64_t)result);
+        /* Block that was previously too far in the future can now
+           be queued to hardware */
+        blk = block_FifoGet(decklink_sys->audioOutputFifo);
+        ScheduleAudioSamples(p_output, aout, blk);
+        block_Release(blk);
     }
-    else if (p_final->i_nb_samples != written) {
-        msg_Err(aout, "Written only %d samples out of %d", written, p_final->i_nb_samples);
-        report(aout, "ERROR AUDIO SAMPLES LOST", (uint64_t)(p_final->i_nb_samples - written));
+
+    /* If block needs to be scheduled too far into the future, put it on the FIFO */
+    if (p_final->i_pts > now + AUDIOHW_FIFO_HIGH_WATERMARK) {
+        block_FifoPut(decklink_sys->audioOutputFifo, p_final);
+    } else {
+        ScheduleAudioSamples(p_output, aout, p_final);
+        block_Release(p_final);
     }
-    block_Release(p_final);
 }
 
 static int OpenAudio(vlc_object_t *p_this)
@@ -1565,7 +1609,7 @@ static int OpenAudio(vlc_object_t *p_this)
     aout->time_get  = TimeGet;
 
     aout->pause     = NULL;
-    aout->stop      = NULL;
+    aout->stop      = Stop;
     aout->mute_set  = NULL;
     aout->volume_set= NULL;
 
