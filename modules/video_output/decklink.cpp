@@ -55,6 +55,7 @@
 #include <DeckLinkAPI.h>
 #include <DeckLinkAPIDispatch.cpp>
 #include "libklvanc/vanc-lines.h"
+#include "libklvanc/vanc-eia_708b.h"
 
 #define MAX_AUDIO_SOURCES 8
 
@@ -196,6 +197,8 @@ struct decklink_sys_t
 
     BMDTimeScale timescale;
     BMDTimeValue frameduration;
+
+    uint16_t cdp_sequence_num;
 
     /* XXX: workaround card clock drift */
     mtime_t offset;
@@ -837,123 +840,50 @@ static void send_vanc_msg(uint8_t *buf, uint16_t *msg, uint16_t msgWordLength)
 }
 
 /* 708 */
-static void send_CC(vout_display_t *vd, cc_data_t *cc, uint16_t **cc_buf, int *cc_buf_len)
+static void send_CC(vout_display_t *vd, cc_data_t *cc, uint16_t **cc_buf, uint16_t *cc_buf_len)
 {
     struct decklink_sys_t *decklink_sys = GetDLSys(VLC_OBJECT(vd));
     uint8_t cc_count = cc->i_data / 3;
+    struct klvanc_packet_eia_708b_s *pkt;
+    unsigned int num, den;
+    int ret;
+
     if (cc_count == 0)
         return;
 
-    assert(cc_count == 20);
+    report(vd, "CC COUNT", cc_count);
 
-    report(vd, "CC COUNT", 20);
-    #if 0
-    if (cc_count < 20) {
-        printf("PADDING\n");
-        for(int i = cc_count; i < 20; i++) {
-            cc->p_data[3*i + 0] = 0xfa;
-            cc->p_data[3*i + 0] = 0x00;
-            cc->p_data[3*i + 0] = 0x00;
-        }
-        cc_count = 20;
-        cc->i_data = 3 * 20;
-    }
-    #endif
+    ret = klvanc_create_eia708_cdp(&pkt);
+    if (ret != 0)
+        return;
 
-    uint16_t len = 6 /* vanc header */
-        + 9 /* cdp header */
-        + 3 * cc_count /* cc_data */
-        + 4 /* cdp footer */
-        + 1 /* vanc checksum */;
-
-    static uint16_t hdr = 0; /* cdp counter */
-    uint16_t *cdp = new uint16_t[len];
-    *cc_buf = cdp;
-    *cc_buf_len = len;
-
-    unsigned int num, den;
     vlc_ureduce(&num, &den, decklink_sys->timescale, decklink_sys->frameduration, 0);
-
-    int rate;
-    if (num == 24000 && den == 1001) {
-        rate = 1;
-    } else if (num == 24 && den == 1) {
-        rate = 2;
-    } else if (num == 25 && den == 1) {
-        rate = 3;
-    } else if (num == 30000 && den == 1001) {
-        rate = 4;
-    } else if (num == 30 && den == 1) {
-        rate = 5;
-    } else if (num == 50 && den == 1) {
-        rate = 6;
-    } else if (num == 60000 && den == 1001) {
-        rate = 7;
-    } else if (num == 60 && den == 1) {
-        rate = 8;
-    } else {
-        printf("Unknown frame rate %d / %d = %.3f\n", num, den, (float)num / den);
+    ret = klvanc_set_framerate_EIA_708B(pkt, den, num);
+    if (ret != 0) {
+        fprintf(stderr, "Invalid framerate specified: %d/%d\n", num, den);
+        klvanc_destroy_eia708_cdp(pkt);
         return;
     }
 
-    uint16_t cdp_header[6+9] = {
-        /* VANC header = 6 words */
-        0x000, 0x3ff, 0x3ff, /* Ancillary Data Flag */
-
-        /* following words need parity bits */
-
-        0x61, /* Data ID */
-        0x01, /* Secondary Data I D= CEA-708 */
-        (uint16_t)(len - 6 - 1), /* Data Count (not including VANC header) */
-
-        /* cdp header */
-
-        0x96, // header id
-        0x69,
-        (uint16_t)(len - 6 - 1),
-        (uint16_t)((rate << 4) | 0x0f),
-        0x43, // cc_data_present | caption_service_active | reserved
-        (uint16_t)(hdr >> 8),
-        (uint16_t)(hdr & 0xff),
-        0x72, // ccdata_id
-        (uint16_t)(0xe0 | cc_count), // cc_count
-    };
-
-    /* cdp header */
-    memcpy(cdp, cdp_header, sizeof(cdp_header));
-
-    /* cdp data */
-    for (size_t i = 0; i < cc_count; i++) { // copy cc_data
-        cdp[6+9+3*i+0] = cc->p_data[3*i+0] /*| 0xfc*/; // marker bits + cc_valid
-        cdp[6+9+3*i+1] = cc->p_data[3*i+1];
-        cdp[6+9+3*i+2] = cc->p_data[3*i+2];
+    if (cc_count > KLVANC_MAX_CC_COUNT) {
+        fprintf(stderr, "Illegal cc_count received: %d\n", cc_count);
+        cc_count = KLVANC_MAX_CC_COUNT;
     }
 
-    /* cdp footer */
-    cdp[len-5] = 0x74; // footer id
-    cdp[len-4] = hdr >> 8;
-    cdp[len-3] = hdr & 0xff;
-    hdr++;
-
-    /* cdp checksum */
-    uint8_t sum = 0;
-    for (uint16_t i = 6; i < len - 2; i++) {
-        sum += cdp[i];
-        sum &= 0xff;
+    /* CC data */
+    pkt->header.ccdata_present = 1;
+    pkt->ccdata.cc_count = cc_count;
+    for (size_t i = 0; i < cc_count; i++) {
+        if (cc->p_data[3*i] & 0x40)
+            pkt->ccdata.cc[i].cc_valid = 1;
+        pkt->ccdata.cc[i].cc_type = cc->p_data[3*i+0] & 0x03;
+        pkt->ccdata.cc[i].cc_data[0] = cc->p_data[3*i+1];
+        pkt->ccdata.cc[i].cc_data[1] = cc->p_data[3*i+2];
     }
-    cdp[len-2] = sum ? 256 - sum : 0;
 
-    /* parity bit */
-    for (uint16_t i = 3; i < len - 1; i++)
-        cdp[i] |= parity(cdp[i]) ? 0x100 : 0x200;
-
-    /* vanc checksum */
-    uint16_t vanc_sum = 0;
-    for (uint16_t i = 3; i < len - 1; i++) {
-        vanc_sum += cdp[i];
-        vanc_sum &= 0x1ff;
-    }
-    cdp[len - 1] = vanc_sum | ((~vanc_sum & 0x100) << 1);
+    klvanc_finalize_EIA_708B(pkt, decklink_sys->cdp_sequence_num++);
+    klvanc_convert_EIA_708B_to_words(pkt, cc_buf, cc_buf_len);
+    klvanc_destroy_eia708_cdp(pkt);
 }
 
 static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *subpicture)
@@ -1032,7 +962,7 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
         int cc_line = var_InheritInteger(vd, VIDEO_CFG_PREFIX "cc-line");
         if (cc_line >= 0) {
             uint16_t *cc_buf = NULL;
-            int cc_buf_len;
+            uint16_t cc_buf_len;
             send_CC(vd, &picture->cc, &cc_buf, &cc_buf_len);
             if (cc_buf != NULL) {
                 klvanc_line_insert(&vanc_lines, cc_buf, cc_buf_len, cc_line, 0);
