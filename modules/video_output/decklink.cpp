@@ -54,6 +54,7 @@
 
 #include <DeckLinkAPI.h>
 #include <DeckLinkAPIDispatch.cpp>
+#include "libklvanc/vanc.h"
 #include "libklvanc/vanc-lines.h"
 #include "libklvanc/vanc-eia_708b.h"
 
@@ -211,6 +212,8 @@ struct decklink_sys_t
     mtime_t offset;
 
     int fd;
+
+    struct klvanc_context_s *vanc_ctx;
 };
 
 /*****************************************************************************
@@ -317,6 +320,7 @@ static struct decklink_sys_t *GetDLSys(vlc_object_t *obj)
             vlc_mutex_init(&sys->lock);
             vlc_cond_init(&sys->cond);
             sys->audioOutputFifo = block_FifoNew();
+	    klvanc_context_create(&sys->vanc_ctx);
             var_Create(libvlc, "decklink-sys", VLC_VAR_ADDRESS);
             var_SetAddress(libvlc, "decklink-sys", (void*)sys);
         }
@@ -352,6 +356,7 @@ static void ReleaseDLSys(vlc_object_t *obj)
 
         destroyAudioSources();
 
+	klvanc_context_destroy(sys->vanc_ctx);
         free(sys);
         var_Destroy(libvlc, "decklink-sys");
     }
@@ -973,7 +978,7 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
             uint16_t cc_buf_len;
             send_CC(vd, &picture->cc, &cc_buf, &cc_buf_len);
             if (cc_buf != NULL) {
-                klvanc_line_insert(&vanc_lines, cc_buf, cc_buf_len, cc_line, 0);
+                klvanc_line_insert(decklink_sys->vanc_ctx, &vanc_lines, cc_buf, cc_buf_len, cc_line, 0);
                 delete [] cc_buf;
             }
         }
@@ -985,7 +990,7 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
             int afd_buf_len;
             send_AFD(&afd_buf, &afd_buf_len);
             if (afd_buf != NULL) {
-                klvanc_line_insert(&vanc_lines, afd_buf, afd_buf_len, afd_line, 0);
+                klvanc_line_insert(decklink_sys->vanc_ctx, &vanc_lines, afd_buf, afd_buf_len, afd_line, 0);
                 delete [] afd_buf;
             }
         }
@@ -996,7 +1001,8 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
                  r = r->p_next) {
                 if (r->fmt.i_chroma != VLC_CODEC_VANC)
                     continue;
-                klvanc_line_insert(&vanc_lines, (uint16_t *) r->p_picture->Y_PIXELS,
+                klvanc_line_insert(decklink_sys->vanc_ctx, &vanc_lines,
+                                   (uint16_t *) r->p_picture->Y_PIXELS,
                                    r->fmt.i_width / sizeof(uint16_t), r->i_y, r->i_x);
             }
         }
@@ -1024,7 +1030,7 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
             }
 
             /* Generate the full line taking into account all VANC packets on that line */
-            klvanc_generate_vanc_line(line, &out_line, &out_len, w);
+            klvanc_generate_vanc_line(decklink_sys->vanc_ctx, line, &out_line, &out_len, w);
 
             /* Repack the 16-bit ints into 10-bit, and push into final buffer */
             send_vanc_msg((uint8_t *) buf, out_line, out_len);
