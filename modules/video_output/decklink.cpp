@@ -419,6 +419,166 @@ static int Calculate1080psfVancLine(int cc_line)
  *
  *****************************************************************************/
 
+static void printDisplayModeProperties(vout_display_t *vd, IDeckLinkDisplayMode *p_display_mode)
+{
+    HRESULT result;
+    BMDTimeValue duration;
+    BMDTimeValue timescale;
+    BMDFieldDominance dom;
+    BMDDisplayMode mode_id;
+    const char *psz_mode_name;
+
+    result = p_display_mode->GetName(&psz_mode_name);
+    if (result != S_OK) {
+        msg_Err(vd, "Could not get Display mode name: 0x%X", result);
+        return;
+    }
+
+    result = p_display_mode->GetFrameRate(&duration, &timescale);
+    if (result != S_OK) {
+        msg_Err(vd, "Could not get Frame Rate: 0x%X", result);
+        return;
+    }
+
+    mode_id = ntohl(p_display_mode->GetDisplayMode());
+    dom = p_display_mode->GetFieldDominance();
+
+    msg_Dbg(vd, "Found mode '%4.4s': %s (%ldx%ld, %.3f fps) Dominance=%c%c%c%c",
+            (char*)&mode_id, psz_mode_name, p_display_mode->GetWidth(),
+            p_display_mode->GetHeight(),
+            double(timescale) / duration,
+            (dom >> 24), (dom >> 16 & 0xff), (dom >> 8 & 0xff), (dom & 0xff));
+}
+
+static int findDisplayModeByMode(vout_display_t *vd, struct decklink_sys_t *decklink_sys,
+                                 BMDDisplayMode mode_id,
+                                 BMDTimeValue *outDuration, BMDTimeScale *outTimeScale,
+                                 int *outWidth, int *outHeight, BMDDisplayMode *outMode)
+{
+    IDeckLinkDisplayMode *p_display_mode = NULL;
+    IDeckLinkDisplayModeIterator *p_display_iterator = NULL;
+    BMDTimeValue duration;
+    BMDTimeValue timescale;
+    HRESULT result;
+    int found = 0;
+
+    result = decklink_sys->p_output->GetDisplayModeIterator(&p_display_iterator);
+    if (result != S_OK) {
+        msg_Err(vd, "Could not get DisplayMode Iterator: 0x%X", result);
+        return -1;
+    }
+    for (; ; p_display_mode->Release())
+    {
+        result = p_display_iterator->Next(&p_display_mode);
+        if (result != S_OK)
+            break;
+
+        result = p_display_mode->GetFrameRate(&duration, &timescale);
+        if (result != S_OK) {
+            msg_Err(vd, "Could not get frame rate: 0x%X", result);
+            continue;
+        }
+
+        printDisplayModeProperties(vd, p_display_mode);
+
+        fprintf(stderr, "Comparing %08x to %08x\n", mode_id, p_display_mode->GetDisplayMode());
+        if (mode_id == p_display_mode->GetDisplayMode()) {
+            *outMode = p_display_mode->GetDisplayMode();
+            *outDuration = duration;
+            *outTimeScale = timescale;
+            *outWidth = p_display_mode->GetWidth();
+            *outHeight = p_display_mode->GetHeight();
+            found = 1;
+            break;
+        }
+    }
+
+    /* Cleanup */
+    p_display_iterator->Release();
+
+    if (found)
+        return 0;
+    else
+        return -1;
+}
+
+static int findDisplayModeByProps(vout_display_t *vd, struct decklink_sys_t *decklink_sys,
+                                  video_format_t *fmt, BMDFieldDominance desired_dom,
+                                  BMDTimeValue *outDuration, BMDTimeScale *outTimeScale,
+                                  int *outWidth, int *outHeight, BMDDisplayMode *outMode)
+{
+    IDeckLinkDisplayMode *p_display_mode = NULL;
+    IDeckLinkDisplayModeIterator *p_display_iterator = NULL;
+    unsigned int num_stream, den_stream;
+    BMDFieldDominance dom;
+    BMDTimeValue duration;
+    BMDTimeValue timescale;
+    unsigned int w, h;
+    HRESULT result;
+    unsigned int fmt_height;
+    int found = 0;
+
+    fmt_height = fmt->i_height;
+    if (fmt_height == 480)
+        fmt_height = 486; /* Decklink outputs 486 NTSC */
+
+    vlc_ureduce(&num_stream, &den_stream,
+                fmt->i_frame_rate, fmt->i_frame_rate_base, 0);
+    msg_Info(vd, "Looking for %dx%d (%d/%d fps)  Dominance=%c%c%c%c", fmt->i_width,
+             fmt_height, num_stream, den_stream, (desired_dom >> 24),
+             (desired_dom >> 16 & 0xff), (desired_dom >> 8 & 0xff),
+             (desired_dom & 0xff));
+
+    result = decklink_sys->p_output->GetDisplayModeIterator(&p_display_iterator);
+    if (result != S_OK) {
+        msg_Err(vd, "Could not get DisplayMode Iterator: 0x%X", result);
+        return -1;
+    }
+    for (; ; p_display_mode->Release())
+    {
+        result = p_display_iterator->Next(&p_display_mode);
+        if (result != S_OK)
+            break;
+
+        result = p_display_mode->GetFrameRate(&duration, &timescale);
+        if (result != S_OK) {
+            msg_Err(vd, "Could not get frame rate: 0x%X", result);
+            continue;
+        }
+
+        w = p_display_mode->GetWidth();
+        h = p_display_mode->GetHeight();
+        dom = p_display_mode->GetFieldDominance();
+
+        printDisplayModeProperties(vd, p_display_mode);
+
+        if (w == fmt->i_width && h == fmt_height) {
+            unsigned int num_deck, den_deck;
+            vlc_ureduce(&num_deck, &den_deck, timescale, duration, 0);
+            if (num_deck == num_stream && den_deck == den_stream &&
+                desired_dom == dom)
+            {
+                msg_Info(vd, "Matches incoming stream!");
+                *outMode = p_display_mode->GetDisplayMode();
+                *outDuration = duration;
+                *outTimeScale = timescale;
+                *outWidth = w;
+                *outHeight = h;
+                found = 1;
+                break;
+            }
+        }
+    }
+
+    /* Cleanup */
+    p_display_iterator->Release();
+
+    if (found)
+        return 0;
+    else
+        return -1;
+}
+
 static struct decklink_sys_t *OpenDecklink(vout_display_t *vd)
 {
     vout_display_sys_t *sys = vd->sys;
@@ -433,11 +593,17 @@ static struct decklink_sys_t *OpenDecklink(vout_display_t *vd)
 
     HRESULT result;
     IDeckLinkIterator *decklink_iterator = NULL;
-    IDeckLinkDisplayMode *p_display_mode = NULL;
-    IDeckLinkDisplayModeIterator *p_display_iterator = NULL;
     IDeckLinkConfiguration *p_config = NULL;
     IDeckLinkAttributes *p_attrs = NULL;
     IDeckLink *p_card = NULL;
+    BMDVideoOutputFlags flags;
+    BMDDisplayMode mode_id = bmdModeUnknown;
+    BMDFieldDominance search_modes[] = {
+        bmdUpperFieldFirst,
+        bmdLowerFieldFirst,
+        bmdProgressiveFrame,
+        bmdProgressiveSegmentedFrame
+    };
 
     struct decklink_sys_t *decklink_sys = GetDLSys(VLC_OBJECT(vd));
     vlc_mutex_lock(&decklink_sys->lock);
@@ -462,6 +628,7 @@ static struct decklink_sys_t *OpenDecklink(vout_display_t *vd)
     memset(&wanted_mode_id, ' ', 4);
     if (mode) {
         strncpy((char*)&wanted_mode_id, mode, 4);
+        wanted_mode_id = htonl(wanted_mode_id);
         free(mode);
     }
 
@@ -510,111 +677,67 @@ static struct decklink_sys_t *OpenDecklink(vout_display_t *vd)
         CHECK("Could not set video output connection");
     }
 
-    result = decklink_sys->p_output->GetDisplayModeIterator(&p_display_iterator);
-    CHECK("Could not enumerate display modes");
-
-
-    unsigned int num, den;
-    vlc_ureduce(&num, &den, fmt->i_frame_rate, fmt->i_frame_rate_base, 0);
-    unsigned fmt_width, fmt_height;
-    fmt_width = fmt->i_width;
-    fmt_height = fmt->i_height;
-    if (fmt_height == 480)
-	fmt_height = 486; /* Decklink outputs 486 NTSC */
-    msg_Info(vd, "Looking for %dx%d (%d/%d fps)", fmt_width, fmt_height, num, den);
-
-    for (; ; p_display_mode->Release())
-    {
-        unsigned w, h;
-        result = p_display_iterator->Next(&p_display_mode);
-        if (result != S_OK)
-            break;
-
-        BMDDisplayMode mode_id = ntohl(p_display_mode->GetDisplayMode());
-
-        const char *psz_mode_name;
-        result = p_display_mode->GetName(&psz_mode_name);
-        CHECK("Could not get display mode name");
-
-        result = p_display_mode->GetFrameRate(&decklink_sys->frameduration,
-            &decklink_sys->timescale);
-        CHECK("Could not get frame rate");
-
-        w = p_display_mode->GetWidth();
-        h = p_display_mode->GetHeight();
-        msg_Dbg(vd, "Found mode '%4.4s': %s (%dx%d, %.3f fps)",
-                (char*)&mode_id, psz_mode_name, w, h,
-                double(decklink_sys->timescale) / decklink_sys->frameduration);
-        msg_Dbg(vd, "scale %d dur %d", (int)decklink_sys->timescale,
-            (int)decklink_sys->frameduration);
-
-        if (w == fmt_width && h == fmt_height) {
-            unsigned int num_deck, den_deck;
-            unsigned int num_stream, den_stream;
-            vlc_ureduce(&num_deck, &den_deck,
-                decklink_sys->timescale, decklink_sys->frameduration, 0);
-            vlc_ureduce(&num_stream, &den_stream,
-                fmt->i_frame_rate, fmt->i_frame_rate_base, 0);
-
-            if (len == 0 && num_deck == num_stream && den_deck == den_stream) {
-                msg_Info(vd, "Matches incoming stream!");
-                wanted_mode_id = mode_id;
-            }
+    if (len != 0) {
+        /* The user forced a specific video format */
+        result = findDisplayModeByMode(vd, decklink_sys, wanted_mode_id,
+                                       &decklink_sys->frameduration, &decklink_sys->timescale,
+                                       &decklink_sys->i_width, &decklink_sys->i_height, &mode_id);
+    } else {
+        /* If the video is 1080, we will take two passes over the list of supported modes.
+           The first pass will look to see if there are any interlaced resolutions.  The
+           second pass will look for progressive.  This is because on all the cards we've
+           seen the 1080p entry is found before 1080i, and we don't want to drop out of
+           the loop early */
+        for (size_t i = 0; i < (sizeof(search_modes) / sizeof(BMDFieldDominance)); i++) {
+            result = findDisplayModeByProps(vd, decklink_sys, fmt, search_modes[i],
+                                            &decklink_sys->frameduration,
+                                            &decklink_sys->timescale,
+                                            &decklink_sys->i_width, &decklink_sys->i_height,
+                                            &mode_id);
+            if (result == 0)
+                break;
         }
-
-        if (wanted_mode_id != mode_id)
-            continue;
-
-        decklink_sys->i_width = w;
-        decklink_sys->i_height = h;
-
-        mode_id = htonl(mode_id);
-
-        BMDVideoOutputFlags flags = bmdVideoOutputVANC;
-        if (mode_id == bmdModeNTSC ||
-            mode_id == bmdModeNTSC2398 ||
-            mode_id == bmdModePAL)
-        {
-            flags = bmdVideoOutputVITC;
-        }
-
-        BMDDisplayModeSupport support;
-        IDeckLinkDisplayMode *resultMode;
-
-        result = decklink_sys->p_output->DoesSupportVideoMode(mode_id,
-            sys->tenbits ? bmdFormat10BitYUV : bmdFormat8BitYUV,
-            flags, &support, &resultMode);
-        CHECK("Does not support video mode");
-        if (support == bmdDisplayModeNotSupported)
-        {
-            msg_Err(vd, "Video mode not supported");
-                goto error;
-        }
-
-        result = decklink_sys->p_output->EnableVideoOutput(mode_id, flags);
-        CHECK("Could not enable video output");
-
-        decklink_sys->b_psf_interlaced = false;
-        if ((strcmp(decklink_sys->psz_model_name, "DeckLink Duo 2") == 0) &&
-            mode_id == bmdModeHD1080p2997)
-        {
-            /* Check the video output status and see if PSF is enabled.  This impacts
-               how we specify VANC line numbers to output to... */
-            bool val;
-            result = p_config->GetFlag(bmdDeckLinkConfigUse1080pNotPsF, &val);
-            if (result == S_OK && val == false)
-            {
-                /* We are in PSF mode */
-                decklink_sys->b_psf_interlaced = true;
-            }
-        }
-        break;
     }
 
     if (decklink_sys->i_width < 0 || decklink_sys->i_width & 1)
     {
         msg_Err(vd, "Unknown video mode specified.");
         goto error;
+    }
+
+    flags = bmdVideoOutputVANC;
+    if (mode_id == bmdModeNTSC || mode_id == bmdModeNTSC2398 || mode_id == bmdModePAL)
+        flags = bmdVideoOutputVITC;
+
+    BMDDisplayModeSupport support;
+    IDeckLinkDisplayMode *resultMode;
+
+    result = decklink_sys->p_output->DoesSupportVideoMode(mode_id,
+                                                          sys->tenbits ? bmdFormat10BitYUV : bmdFormat8BitYUV,
+                                                          flags, &support, &resultMode);
+    CHECK("Does not support video mode");
+    if (support == bmdDisplayModeNotSupported)
+    {
+        msg_Err(vd, "Video mode not supported");
+        goto error;
+    }
+
+    result = decklink_sys->p_output->EnableVideoOutput(mode_id, flags);
+    CHECK("Could not enable video output");
+
+    decklink_sys->b_psf_interlaced = false;
+    if ((strcmp(decklink_sys->psz_model_name, "DeckLink Duo 2") == 0) &&
+        mode_id == bmdModeHD1080p2997)
+    {
+        /* Check the video output status and see if PSF is enabled.  This impacts
+           how we specify VANC line numbers to output to... */
+        bool val;
+        result = p_config->GetFlag(bmdDeckLinkConfigUse1080pNotPsF, &val);
+        if (result == S_OK && val == false)
+        {
+            /* We are in PSF mode */
+            decklink_sys->b_psf_interlaced = true;
+        }
     }
 
     result = p_attrs->GetInt(BMDDeckLinkMaximumAudioChannels,
@@ -645,8 +768,6 @@ static struct decklink_sys_t *OpenDecklink(vout_display_t *vd)
 
     p_config->Release();
     p_attrs->Release();
-    p_display_mode->Release();
-    p_display_iterator->Release();
     p_card->Release();
     decklink_iterator->Release();
 
@@ -665,12 +786,8 @@ error:
         p_config->Release();
     if (p_attrs)
         p_attrs->Release();
-    if (p_display_iterator)
-        p_display_iterator->Release();
     if (decklink_iterator)
         decklink_iterator->Release();
-    if (p_display_mode)
-        p_display_mode->Release();
 
     vlc_mutex_unlock(&decklink_sys->lock);
     ReleaseDLSys(VLC_OBJECT(vd));
