@@ -627,10 +627,12 @@ static void GetH264CC(block_t *block, decoder_sys_t *p_sys)
     size_t len = block->i_buffer;
     uint8_t *buf = block->p_buffer;
     block_t *nal = NULL;
+
+    /* See SCTE 128-1 2013 Sec 8.1.2 */
     static const uint8_t dvb1_data_start_code[] = {
         0xb5,
         0x00, 0x31,
-        0x47, 0x41, 0x39, 0x34
+        0x47, 0x41, 0x39, 0x34, 0x03
     };
 
     while (len > 5) {
@@ -660,7 +662,8 @@ static void GetH264CC(block_t *block, decoder_sys_t *p_sys)
             type = nal_read_sei_header(nal);
             size_t size = nal_read_sei_header(nal);
 
-            if (type == 4 && size > 7 && !memcmp(nal->p_buffer, dvb1_data_start_code, 7)) {
+            if (type == 4 && size > sizeof(dvb1_data_start_code) &&
+                !memcmp(nal->p_buffer, dvb1_data_start_code, sizeof(dvb1_data_start_code))) {
                 nal->i_buffer = size;
                 break;
             }
@@ -686,7 +689,7 @@ static void GetH264CC(block_t *block, decoder_sys_t *p_sys)
 
     /* user_data_registered_itu_t_t35 packet */
 
-    if (memcmp(nal->p_buffer, dvb1_data_start_code, 7))
+    if (memcmp(nal->p_buffer, dvb1_data_start_code, sizeof(dvb1_data_start_code)))
         return;
 
     nal->p_buffer += 3;
