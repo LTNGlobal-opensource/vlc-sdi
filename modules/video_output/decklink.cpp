@@ -1096,7 +1096,7 @@ static void DisplayVideo(vout_display_t *vd, picture_t *picture, subpicture_t *s
             send_CC(vd, &picture->cc, &cc_buf, &cc_buf_len);
             if (cc_buf != NULL) {
                 klvanc_line_insert(decklink_sys->vanc_ctx, &vanc_lines, cc_buf, cc_buf_len, cc_line, 0);
-                delete [] cc_buf;
+                free(cc_buf);
             }
         }
 
