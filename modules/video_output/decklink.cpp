@@ -54,6 +54,7 @@
 
 #include <DeckLinkAPI.h>
 #include <DeckLinkAPIDispatch.cpp>
+#include <DeckLinkAPIVersion.h>
 #include "libklvanc/vanc-lines.h"
 
 #define MAX_AUDIO_SOURCES 8
@@ -579,6 +580,42 @@ static int findDisplayModeByProps(vout_display_t *vd, struct decklink_sys_t *dec
         return -1;
 }
 
+#if BLACKMAGIC_DECKLINK_API_VERSION >= 0x0a080000
+static void reset_output(vout_display_t *vd, IDeckLink *p_card, IDeckLinkOutput *p_output)
+{
+    /* The decklink driver can sometimes get stuck in a state where
+       EnableVideoOutput always fails.  To work around this issue,
+       call it with the last configured output mode, which causes it
+       to recover */
+    IDeckLinkStatus *p_status;
+    int64_t vid_mode;
+    int result;
+
+    result = p_card->QueryInterface(IID_IDeckLinkStatus, (void**)&p_status);
+    if (result != S_OK) {
+        msg_Err(vd, "Could not get status interface");
+        return;
+    }
+
+    result = p_status->GetInt(bmdDeckLinkStatusCurrentVideoOutputMode, &vid_mode);
+    if (result != S_OK) {
+        msg_Err(vd, "Could not get current video output mode");
+        p_status->Release();
+        return;
+    }
+
+    result = p_output->EnableVideoOutput(vid_mode, bmdVideoOutputFlagDefault);
+    if (result != S_OK) {
+        msg_Err(vd, "Could not get enable video output mode");
+        p_status->Release();
+        return;
+    }
+
+    p_output->DisableVideoOutput();
+    p_status->Release();
+}
+#endif
+
 static struct decklink_sys_t *OpenDecklink(vout_display_t *vd)
 {
     vout_display_sys_t *sys = vd->sys;
@@ -721,6 +758,10 @@ static struct decklink_sys_t *OpenDecklink(vout_display_t *vd)
         msg_Err(vd, "Video mode not supported");
         goto error;
     }
+
+#if BLACKMAGIC_DECKLINK_API_VERSION >= 0x0a080000
+    reset_output(vd, p_card, decklink_sys->p_output);
+#endif
 
     result = decklink_sys->p_output->EnableVideoOutput(mode_id, flags);
     CHECK("Could not enable video output");
